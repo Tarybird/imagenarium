@@ -1,0 +1,8 @@
+﻿## Startup — выполни перед работой
+
+```bash
+python "D:\AI проекты\projects\agent-memory\cli.py" brief "<задача>" --json
+```
+
+Используй `memory_hits` как контекст перед тем как читать файлы или писать код.
+После важных решений сохрани: `python "D:\AI проекты\projects\agent-memory\cli.py" add --type decision --title "..." --content "..." --source cursor`
