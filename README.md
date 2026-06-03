@@ -200,24 +200,26 @@ This is enough for a single-user MVP.
 ### Replace background by prompt
 
 1. User uploads image.
-2. Backend removes background or creates a usable mask.
-3. Backend runs inpainting with a new background prompt.
-4. Result is saved locally.
+2. Backend uploads the source image to Runware.
+3. Backend calls `removeBackground` with `returnOnlyMask: true` to get the editable background mask.
+4. Backend uploads the mask and runs inpainting with a new background prompt using `FLUX Fill`.
+5. Result is saved locally.
 
 ### Replace background by second image
 
 1. User uploads source image.
 2. User uploads second background image.
-3. Backend removes background from source image.
-4. Backend composites foreground over the second image.
+3. Backend removes the source background through Runware.
+4. Backend composites the foreground over the second image locally.
 5. Result is saved locally.
 
 ### Upscale
 
 1. User selects one existing result.
-2. Backend sends it to Runware upscale.
-3. Upscaled image is stored locally.
-4. Database stores the extra cost.
+2. Backend uploads it to Runware.
+3. Backend sends it to P-Image Upscale with a `targetMegapixels` value.
+4. Upscaled image is stored locally.
+5. Database stores the extra cost.
 
 ### Vectorize
 
@@ -277,8 +279,8 @@ The first version should stay focused and cheap.
 Current status:
 
 - local Git repository is initialized;
-- no GitHub remote is configured yet;
-- nothing has been pushed from this folder yet;
+- GitHub remote is configured and points to `Tarybird/imagenarium`;
+- the first commit has already been pushed;
 - GitHub CLI is not installed on this machine.
 
 ## Suggested Next Steps

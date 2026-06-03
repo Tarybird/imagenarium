@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Job #{{ job.id }} - Imagenarium</title>
+    <style>
+      :root {
+        --bg: #f3efe6;
+        --panel: #fffaf1;
+        --text: #241b18;
+        --muted: #6f625a;
+        --line: #d9cab9;
+        --accent: #5d2f1f;
+        --success: #1f7a48;
+        --error: #b42318;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Georgia, "Times New Roman", serif;
+        color: var(--text);
+        background: var(--bg);
+      }
+      .shell { max-width: 1280px; margin: 0 auto; padding: 28px; }
+      .panel {
+        background: rgba(255, 250, 241, 0.94);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        box-shadow: 0 10px 30px rgba(38, 24, 18, 0.08);
+        overflow: hidden;
+      }
+      .top {
+        padding: 18px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+      .main { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 16px; margin-top: 16px; }
+      .media, .meta, .history {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        overflow: hidden;
+      }
+      .media img, .media svg {
+        display: block;
+        width: 100%;
+        height: auto;
+        background: white;
+      }
+      .meta { padding: 18px; }
+      .meta h2, .history h2 { margin-top: 0; }
+      .kv { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 0.95rem; }
+      .kv div {
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: rgba(255,255,255,0.7);
+      }
+      .muted { color: var(--muted); }
+      .tag {
+        display: inline-block;
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: #efe2d0;
+        color: var(--accent);
+        font-size: 0.8rem;
+      }
+      .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+      a.button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 11px 14px;
+        border-radius: 12px;
+        text-decoration: none;
+        background: var(--accent);
+        color: white;
+      }
+      a.button.secondary { background: white; color: var(--accent); border: 1px solid var(--line); }
+      .notice {
+        border-radius: 12px;
+        padding: 12px 14px;
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,0.8);
+        margin-bottom: 14px;
+      }
+      .notice.success { border-color: rgba(31,122,72,0.25); color: var(--success); }
+      .notice.error { border-color: rgba(180,35,24,0.25); color: var(--error); }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th, td {
+        text-align: left;
+        padding: 10px 12px;
+        border-top: 1px solid var(--line);
+        vertical-align: top;
+      }
+      @media (max-width: 980px) {
+        .main, .kv { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for category, message in messages %}
+            <div class="notice {{ category }}">{{ message }}</div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+
+      <section class="panel">
+        <div class="top">
+          <div>
+            <div class="tag">#{{ job.id }}</div>
+            <h1 style="margin: 10px 0 6px;">{{ job.type }}</h1>
+            <div class="muted">Status: {{ job.status }}</div>
+          </div>
+          <div class="actions" style="margin-top: 0;">
+            <a class="button secondary" href="{{ url_for('index') }}">Back</a>
+            {% if job.result_file %}
+              <a class="button" href="{{ url_for('download', job_id=job.id) }}">Download</a>
+            {% endif %}
+          </div>
+        </div>
+      </section>
+
+      <div class="main">
+        <section class="media">
+          {% if job.result_file and job.result_file.endswith('.svg') %}
+            <object data="{{ url_for('media', job_id=job.id) }}" type="image/svg+xml" style="width: 100%; min-height: 640px;"></object>
+          {% elif job.result_file %}
+            <img src="{{ url_for('media', job_id=job.id) }}" alt="Result image">
+          {% else %}
+            <div style="padding: 18px;" class="muted">No output file.</div>
+          {% endif %}
+        </section>
+
+        <section class="meta">
+          <h2>Details</h2>
+          <div class="kv">
+            <div><strong>Prompt</strong><br>{{ job.prompt or '-' }}</div>
+            <div><strong>Model</strong><br>{{ job.model or '-' }}</div>
+            <div><strong>Source</strong><br>{{ job.source_file or '-' }}</div>
+            <div><strong>Background</strong><br>{{ job.background_file or '-' }}</div>
+            <div><strong>Size</strong><br>{{ job.width or '-' }} x {{ job.height or '-' }}</div>
+            <div><strong>Cost</strong><br>{{ job.cost_usd if job.cost_usd is not none else '-' }}</div>
+            <div><strong>Created</strong><br>{{ job.created_at }}</div>
+            <div><strong>Error</strong><br>{{ job.error_message or '-' }}</div>
+          </div>
+        </section>
+
+        <section class="history" style="grid-column: 1 / -1;">
+          <h2 style="padding: 18px 18px 0; margin-bottom: 0;">Recent Jobs</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Prompt</th>
+                <th>Open</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in jobs %}
+                <tr>
+                  <td>#{{ item.id }}</td>
+                  <td><span class="tag">{{ item.type }}</span></td>
+                  <td>{{ item.status }}</td>
+                  <td class="muted">{{ item.prompt or '-' }}</td>
+                  <td><a href="{{ url_for('job_detail', job_id=item.id) }}">View</a></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+      </div>
+    </div>
+  </body>
+</html>
