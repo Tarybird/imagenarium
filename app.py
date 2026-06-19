@@ -35,6 +35,23 @@ QUALITY_PRESETS = {
     "economy": {"dimension_factor": 0.5, "steps_factor": 0.6},
 }
 
+# FLUX.1 [dev] (runware:101@1) is guidance-distilled: unlike SDXL it does not
+# use classifier-free guidance in the traditional sense and has a much
+# narrower effective CFGScale range (roughly 2-5; values above ~5 add little
+# and can start to look over-cooked, values near 1 barely follow the prompt).
+# The previous code never sent CFGScale at all, leaving it to an undocumented
+# API-side default - on a model this guidance-sensitive that produced
+# generations that drifted from the prompt. Pin an explicit, known-good
+# default and keep it overridable via env/form for experimentation.
+DEFAULT_CFG_SCALE = 3.5
+MIN_CFG_SCALE = 1.0
+MAX_CFG_SCALE = 10.0
+
+
+def clamp_cfg_scale(value: float) -> float:
+    return max(MIN_CFG_SCALE, min(MAX_CFG_SCALE, value))
+
+
 # Demo mode caps request volume on a public deployment. A holder of
 # DEMO_ACCESS_TOKEN (sent as header X-Demo-Token or form field access_token)
 # is treated as a trusted/own user and exempted from the stricter public
@@ -157,6 +174,10 @@ def create_app() -> Flask:
         requested_width = parse_int(request.form.get("width"), get_default_int("DEFAULT_WIDTH", 1024))
         requested_height = parse_int(request.form.get("height"), get_default_int("DEFAULT_HEIGHT", 1024))
         requested_steps = parse_int(request.form.get("steps"), 30)
+        requested_cfg_scale = parse_optional_float(request.form.get("cfg_scale"))
+        cfg_scale = clamp_cfg_scale(
+            requested_cfg_scale if requested_cfg_scale is not None else get_default_float("DEFAULT_CFG_SCALE", DEFAULT_CFG_SCALE)
+        )
 
         width = clamp_dimension(int(requested_width * preset["dimension_factor"]))
         height = clamp_dimension(int(requested_height * preset["dimension_factor"]))
@@ -175,6 +196,7 @@ def create_app() -> Flask:
                 width=width,
                 height=height,
                 steps=steps,
+                cfg_scale=cfg_scale,
                 seed=seed,
                 model=model,
             )
@@ -308,7 +330,8 @@ def create_app() -> Flask:
                 return_only_mask=False,
             )
             foreground = Image.open(removed.local_path).convert("RGBA")
-            background = Image.open(background_source.saved_path).convert("RGBA").resize(foreground.size, Image.LANCZOS)
+            background_raw = Image.open(background_source.saved_path).convert("RGBA")
+            background = resize_cover(background_raw, *foreground.size)
             composited = Image.alpha_composite(background, foreground)
             composited_path = save_image(composited, EDITED_DIR / f"{uuid.uuid4().hex}_composited.png")
             job_id = create_job(
@@ -553,6 +576,22 @@ def parse_optional_int(value: str | None) -> int | None:
         return None
 
 
+def parse_optional_float(value: str | None) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def get_default_float(name: str, fallback: float) -> float:
+    try:
+        return float(os.environ.get(name, str(fallback)))
+    except ValueError:
+        return fallback
+
+
 def get_upload_or_source(file_field: str, job_field: str) -> StoredSource | None:
     uploaded = request.files.get(file_field)
     if uploaded and uploaded.filename:
@@ -592,6 +631,28 @@ def path_to_data_uri(path: Path) -> str:
     media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:{media_type};base64,{encoded}"
+
+def resize_cover(image: Image.Image, target_width: int, target_height: int) -> Image.Image:
+    """Resize ``image`` to exactly (target_width, target_height) using
+    "object-fit: cover" semantics: scale to fully cover the target box while
+    preserving aspect ratio, then center-crop the overflow. This avoids the
+    distortion caused by a naive ``resize((w, h))`` (which behaves like
+    "object-fit: fill" and stretches/squishes the image to match the target
+    aspect ratio).
+    """
+    source_width, source_height = image.size
+    if source_width == 0 or source_height == 0:
+        return image.resize((target_width, target_height), Image.LANCZOS)
+
+    scale = max(target_width / source_width, target_height / source_height)
+    scaled_width = max(1, round(source_width * scale))
+    scaled_height = max(1, round(source_height * scale))
+    scaled = image.resize((scaled_width, scaled_height), Image.LANCZOS)
+
+    left = (scaled_width - target_width) // 2
+    top = (scaled_height - target_height) // 2
+    return scaled.crop((left, top, left + target_width, top + target_height))
+
 
 def save_image(image: Image.Image, destination: Path) -> str:
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -679,6 +740,7 @@ def runware_generate(
     model: str,
     negative_prompt: str | None = None,
     steps: int | None = None,
+    cfg_scale: float | None = None,
     seed: int | None = None,
     output_format: str = "JPG",
 ) -> RunwareResult:
@@ -698,6 +760,8 @@ def runware_generate(
         task["negativePrompt"] = negative_prompt
     if steps is not None:
         task["steps"] = steps
+    if cfg_scale is not None:
+        task["CFGScale"] = cfg_scale
     if seed is not None:
         task["seed"] = seed
 
