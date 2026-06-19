@@ -124,6 +124,7 @@
       }
       button, .button {
         display: inline-flex;
+        flex-shrink: 0;
         align-items: center;
         justify-content: center;
         gap: 8px;
@@ -136,6 +137,9 @@
         text-decoration: none;
         cursor: pointer;
         min-height: 46px;
+        white-space: normal;
+        text-align: center;
+        word-break: break-word;
       }
       .button.secondary, button.secondary { background: #fff; color: var(--accent); border: 1px solid var(--line); }
       .button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); }

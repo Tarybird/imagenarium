@@ -4,6 +4,7 @@ import base64
 import io
 import mimetypes
 import os
+import re
 import sqlite3
 import uuid
 from dataclasses import dataclass
@@ -222,6 +223,89 @@ def clamp_megapixels(value: int) -> int:
     return max(1, min(MAX_UPSCALE_MEGAPIXELS, value))
 
 
+# FLUX.1 [dev] follows English prompts noticeably more faithfully than Russian
+# ones (confirmed by A/B testing: "очки"/glasses were dropped in Russian but
+# rendered correctly once the same prompt was translated to English), and it
+# mostly ignores single-word style cues ("watercolor") unless the prompt spells
+# out the medium's texture and a negative prompt actively pushes away from
+# "photo"/flat illustration. So every prompt is translated to English first,
+# then matched against texture expansions on the translated text.
+CYRILLIC_RE = re.compile(r"[а-яА-ЯёЁ]")
+
+STYLE_TEXTURE_EXPANSIONS = {
+    "watercolor": (
+        "traditional watercolor painting, visible watercolor paper texture, pigment bleed, "
+        "wet-on-wet bleeding edges, loose expressive brush strokes, no clean outlines",
+        "illustration, cartoon, vector art, flat colors, clean line art",
+    ),
+    "pencil": (
+        "pencil drawing, visible graphite texture, crosshatching shading, hand-drawn sketch lines",
+        "flat vector art, clean line art",
+    ),
+    "oil painting": (
+        "oil painting, visible canvas texture, thick impasto brush strokes, blended pigment",
+        "flat illustration, vector art, clean line art",
+    ),
+    "pastel": (
+        "soft pastel drawing, visible pastel paper grain, chalky texture, blended soft strokes",
+        "flat illustration, vector art",
+    ),
+    "ink drawing": (
+        "ink drawing, india ink, visible pen strokes, cross-hatching, high contrast linework",
+        "flat vector art",
+    ),
+}
+
+ANTI_PHOTOREALISM_NEGATIVE = "photo, photorealistic, realistic, 3d render, photography"
+
+# Thin elongated parts (tails, fingers, limbs) are a known diffusion-model weak
+# spot — they get duplicated/forked partway through. Applied to every
+# generation, not just style-matched ones, since it's a general anatomy issue.
+ANATOMY_NEGATIVE = "forked tail, split tail, duplicated limbs, extra limbs, deformed anatomy, malformed paws, twisted tail, extra tail"
+
+# FLUX.1 [dev] occasionally signs its output with a fake artist signature/
+# watermark in a corner. Applied to every generation, like ANATOMY_NEGATIVE.
+WATERMARK_NEGATIVE = "signature, watermark, artist signature, text, logo, caption"
+
+
+def translate_to_english(text: str) -> str:
+    if not text or not CYRILLIC_RE.search(text):
+        return text
+    try:
+        from deep_translator import GoogleTranslator
+
+        return GoogleTranslator(source="ru", target="en").translate(text)
+    except Exception:
+        return text
+
+
+def strengthen_prompt(prompt: str, negative_prompt: str | None) -> tuple[str, str | None]:
+    prompt = translate_to_english(prompt)
+    negative_prompt = translate_to_english(negative_prompt) if negative_prompt else negative_prompt
+
+    lowered = prompt.lower()
+    matched_textures = []
+    matched_negatives = []
+    for keyword, (texture_suffix, extra_negative) in STYLE_TEXTURE_EXPANSIONS.items():
+        if keyword in lowered and "texture" not in lowered:
+            matched_textures.append(texture_suffix)
+            matched_negatives.append(extra_negative)
+
+    strengthened_prompt = prompt
+    if matched_textures:
+        strengthened_prompt = prompt + ", " + ", ".join(matched_textures)
+
+    negative_parts = [negative_prompt] if negative_prompt else []
+    if matched_textures:
+        negative_parts.append(ANTI_PHOTOREALISM_NEGATIVE)
+        negative_parts.extend(matched_negatives)
+    negative_parts.append(ANATOMY_NEGATIVE)
+    negative_parts.append(WATERMARK_NEGATIVE)
+    strengthened_negative = ", ".join(dict.fromkeys(negative_parts))
+
+    return strengthened_prompt, strengthened_negative
+
+
 BASE_DIR = Path(__file__).resolve().parent
 INSTANCE_DIR = BASE_DIR / "instance"
 UPLOAD_DIR = INSTANCE_DIR / "uploads"
@@ -318,6 +402,7 @@ def create_app() -> Flask:
     def generate():
         prompt = request.form.get("prompt", "").strip()
         negative_prompt = request.form.get("negative_prompt", "").strip()
+        prompt, negative_prompt = strengthen_prompt(prompt, negative_prompt)
         quality = request.form.get("quality", "standard").strip().lower()
         if quality not in QUALITY_PRESETS:
             quality = "standard"
@@ -428,7 +513,7 @@ def create_app() -> Flask:
     @limiter.limit("5 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
     def replace_background_prompt():
         source = get_upload_or_source("image", "source_job_id")
-        prompt = request.form.get("background_prompt", "").strip()
+        prompt = translate_to_english(request.form.get("background_prompt", "").strip())
         width = clamp_dimension(parse_int(request.form.get("width"), get_default_int("DEFAULT_WIDTH", 1024)))
         height = clamp_dimension(parse_int(request.form.get("height"), get_default_int("DEFAULT_HEIGHT", 1024)))
         if source is None or not prompt:
@@ -525,7 +610,7 @@ def create_app() -> Flask:
     @limiter.limit("5 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
     def inpaint():
         source = get_upload_or_source("image", "source_job_id")
-        prompt = request.form.get("inpaint_prompt", "").strip()
+        prompt = translate_to_english(request.form.get("inpaint_prompt", "").strip())
         mask_data_url = request.form.get("mask_data_url", "").strip()
         if source is None or not prompt or not mask_data_url:
             flash("Загрузите изображение, выделите область на маске и опишите, что должно там быть.", "error")
@@ -582,7 +667,7 @@ def create_app() -> Flask:
     @app.post("/generate-icon")
     @limiter.limit("5 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
     def generate_icon():
-        subject = request.form.get("icon_subject", "").strip()
+        subject = translate_to_english(request.form.get("icon_subject", "").strip())
         if not subject:
             flash("Опишите, какая иконка нужна.", "error")
             return redirect(url_for("index"))
@@ -646,7 +731,7 @@ def create_app() -> Flask:
     @limiter.limit("5 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
     def generate_icon_batch():
         raw_subjects = request.form.get("batch_subjects", "")
-        subjects = [line.strip() for line in raw_subjects.splitlines() if line.strip()]
+        subjects = [translate_to_english(line.strip()) for line in raw_subjects.splitlines() if line.strip()]
         # Cap batch size: this still calls the paid Runware API once per icon,
         # so an unbounded list textarea could otherwise be abused into a huge
         # bill in one click.
