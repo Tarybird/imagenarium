@@ -70,7 +70,7 @@ ICON_STYLE_PRESETS = {
         ),
         "negative_prompt": "photo, realistic, 3d render, gradient, texture, shadow, clutter, text, watermark",
         "cfg_scale": 2.5,
-        "size": 1024,
+        "size": 256,
     },
     "line": {
         "label": "Line art / outline",
@@ -81,7 +81,7 @@ ICON_STYLE_PRESETS = {
         ),
         "negative_prompt": "photo, realistic, color fill, gradient, shadow, texture, clutter, text, watermark",
         "cfg_scale": 2.5,
-        "size": 1024,
+        "size": 256,
     },
     "isometric": {
         "label": "Isometric",
@@ -92,7 +92,7 @@ ICON_STYLE_PRESETS = {
         ),
         "negative_prompt": "photo, realistic, flat 2d, text, watermark, clutter",
         "cfg_scale": 3.0,
-        "size": 1024,
+        "size": 256,
     },
     "gradient": {
         "label": "Gradient modern",
@@ -103,9 +103,71 @@ ICON_STYLE_PRESETS = {
         ),
         "negative_prompt": "photo, realistic, flat color only, sketch, text, watermark, clutter",
         "cfg_scale": 3.0,
-        "size": 1024,
+        "size": 256,
     },
 }
+
+# Icons are always re-rasterized through /vectorize before use, so the raster
+# resolution only needs to be high enough for clean vector tracing - not full
+# stock-photo resolution. Runware's documented floor is 128px/side; 256px
+# gives the SVG tracer comfortably more edge detail than the 128px minimum
+# while still costing a small fraction of a 1024px generation. Both are
+# offered in the form; 256 is the default ("icon_size" form field, falls back
+# here if missing/invalid).
+ICON_SIZE_CHOICES = (128, 256, 384, 512)
+DEFAULT_ICON_SIZE = 256
+
+
+def clamp_icon_size(value: int) -> int:
+    """Snap an arbitrary requested icon size to the nearest allowed choice."""
+    return min(ICON_SIZE_CHOICES, key=lambda choice: abs(choice - value))
+
+
+def resolve_icon_style_choice(form) -> tuple[str, dict | None, str | None]:
+    """Read icon_style/style_profile_id from a form and resolve which style
+    source to use.
+
+    Returns (style_key, profile_row_or_None, error_message_or_None). When a
+    style_profile_id is supplied it takes priority over icon_style, matching
+    "choose a saved profile instead of one of the 4 presets" from the spec.
+    """
+    profile_id = parse_optional_int(form.get("style_profile_id"))
+    if profile_id:
+        profile = get_style_profile(profile_id)
+        if profile is None:
+            return "", None, "Выбранный стилевой профиль не найден."
+        return "profile", profile, None
+
+    style = form.get("icon_style", "").strip().lower()
+    if style not in ICON_STYLE_PRESETS:
+        style = "flat"
+    return style, None, None
+
+
+def build_icon_generation_params(
+    subject: str, style: str, profile: dict | None
+) -> tuple[str, str, float, int | None, int | None]:
+    """Build (prompt, negative_prompt, cfg_scale, seed, style_profile_id) for
+    one icon, from either a saved style profile or one of the 4 built-in
+    presets.
+
+    For a profile, the free-text style description is appended to a plain
+    icon framing of the subject (rather than reusing a preset's prompt
+    template), and the profile's fixed seed is applied for consistency.
+    """
+    if profile is not None:
+        prompt = f"icon of {subject}, {profile['style_text']}, centered composition, white background"
+        negative_prompt = "photo, realistic, text, watermark, clutter, signature"
+        cfg_scale = DEFAULT_CFG_SCALE
+        seed = profile["seed"]
+        style_profile_id = profile["id"]
+        return prompt, negative_prompt, cfg_scale, seed, style_profile_id
+
+    style_preset = ICON_STYLE_PRESETS.get(style, ICON_STYLE_PRESETS["flat"])
+    prompt = style_preset["prompt_template"].format(subject=subject)
+    negative_prompt = style_preset.get("negative_prompt", "")
+    cfg_scale = style_preset.get("cfg_scale", DEFAULT_CFG_SCALE)
+    return prompt, negative_prompt, cfg_scale, None, None
 
 # FLUX.1 [dev] (runware:101@1) is guidance-distilled: unlike SDXL it does not
 # use classifier-free guidance in the traditional sense and has a much
@@ -217,6 +279,10 @@ def create_app() -> Flask:
             jobs=list_jobs(limit=12),
             source_jobs=list_jobs(limit=20),
             defaults=get_defaults(),
+            style_profiles=list_style_profiles(),
+            icon_batches=list_batches(limit=10),
+            icon_size_choices=ICON_SIZE_CHOICES,
+            default_icon_size=DEFAULT_ICON_SIZE,
         )
 
     @app.get("/jobs/<int:job_id>")
@@ -231,6 +297,10 @@ def create_app() -> Flask:
             jobs=list_jobs(limit=12),
             source_jobs=list_jobs(limit=20),
             defaults=get_defaults(),
+            style_profiles=list_style_profiles(),
+            icon_batches=list_batches(limit=10),
+            icon_size_choices=ICON_SIZE_CHOICES,
+            default_icon_size=DEFAULT_ICON_SIZE,
         )
 
     @app.get("/media/<int:job_id>")
@@ -513,18 +583,19 @@ def create_app() -> Flask:
     @limiter.limit("5 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
     def generate_icon():
         subject = request.form.get("icon_subject", "").strip()
-        style = request.form.get("icon_style", "").strip().lower()
-        if style not in ICON_STYLE_PRESETS:
-            style = "flat"
         if not subject:
             flash("Опишите, какая иконка нужна.", "error")
             return redirect(url_for("index"))
 
-        style_preset = ICON_STYLE_PRESETS[style]
-        prompt = style_preset["prompt_template"].format(subject=subject)
-        negative_prompt = style_preset.get("negative_prompt", "")
-        cfg_scale = style_preset.get("cfg_scale", DEFAULT_CFG_SCALE)
-        size = style_preset.get("size", 1024)
+        size = clamp_icon_size(parse_int(request.form.get("icon_size"), DEFAULT_ICON_SIZE))
+        style, profile, error = resolve_icon_style_choice(request.form)
+        if error:
+            flash(error, "error")
+            return redirect(url_for("index"))
+
+        prompt, negative_prompt, cfg_scale, seed, style_profile_id = build_icon_generation_params(
+            subject, style, profile
+        )
         model = os.environ.get("RUNWARE_TEXT_MODEL", "runware:101@1")
 
         try:
@@ -535,6 +606,7 @@ def create_app() -> Flask:
                 height=size,
                 steps=30,
                 cfg_scale=cfg_scale,
+                seed=seed,
                 model=model,
             )
             job_id = create_job(
@@ -546,6 +618,8 @@ def create_app() -> Flask:
                 width=size,
                 height=size,
                 cfg_scale=cfg_scale,
+                seed=seed,
+                style_profile_id=style_profile_id,
                 cost_usd=result.cost,
                 result_file=result.local_path,
             )
@@ -561,10 +635,126 @@ def create_app() -> Flask:
                 width=size,
                 height=size,
                 cfg_scale=cfg_scale,
+                seed=seed,
+                style_profile_id=style_profile_id,
                 error_message=str(exc),
             )
             flash(f"Не удалось сгенерировать иконку: {exc}", "error")
             return redirect(url_for("job_detail", job_id=job_id))
+
+    @app.post("/generate-icon-batch")
+    @limiter.limit("5 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
+    def generate_icon_batch():
+        raw_subjects = request.form.get("batch_subjects", "")
+        subjects = [line.strip() for line in raw_subjects.splitlines() if line.strip()]
+        # Cap batch size: this still calls the paid Runware API once per icon,
+        # so an unbounded list textarea could otherwise be abused into a huge
+        # bill in one click.
+        max_batch = 12
+        if not subjects:
+            flash("Введите хотя бы одно название иконки (по одной на строку).", "error")
+            return redirect(url_for("index"))
+        if len(subjects) > max_batch:
+            flash(f"Слишком много иконок в наборе (максимум {max_batch} за один запуск).", "error")
+            return redirect(url_for("index"))
+
+        size = clamp_icon_size(parse_int(request.form.get("icon_size"), DEFAULT_ICON_SIZE))
+        style, profile, error = resolve_icon_style_choice(request.form)
+        if error:
+            flash(error, "error")
+            return redirect(url_for("index"))
+
+        model = os.environ.get("RUNWARE_TEXT_MODEL", "runware:101@1")
+        batch_id = uuid.uuid4().hex
+        last_job_id = None
+        succeeded = 0
+
+        for index, subject in enumerate(subjects):
+            prompt, negative_prompt, cfg_scale, seed, style_profile_id = build_icon_generation_params(
+                subject, style, profile
+            )
+            # Using one identical seed for every icon in the set tends to
+            # collapse different subjects into near-identical compositions
+            # (the seed fixes the initial noise layout, which dominates
+            # composition more than the prompt text for short icon prompts).
+            # Offsetting the seed per item keeps the shared style/negative
+            # prompt doing the consistency work while still giving each icon
+            # its own layout - the standard cheap workaround documented for
+            # fixed-seed batch generation without IP-Adapter/LoRA.
+            if seed is not None:
+                seed = seed + index
+            try:
+                result = runware_generate(
+                    prompt=prompt,
+                    negative_prompt=negative_prompt or None,
+                    width=size,
+                    height=size,
+                    steps=30,
+                    cfg_scale=cfg_scale,
+                    seed=seed,
+                    model=model,
+                )
+                last_job_id = create_job(
+                    job_type="icon",
+                    status="done",
+                    prompt=prompt,
+                    negative_prompt=negative_prompt or None,
+                    model=model,
+                    width=size,
+                    height=size,
+                    cfg_scale=cfg_scale,
+                    seed=seed,
+                    style_profile_id=style_profile_id,
+                    cost_usd=result.cost,
+                    result_file=result.local_path,
+                    batch_id=batch_id,
+                )
+                succeeded += 1
+            except Exception as exc:
+                last_job_id = create_job(
+                    job_type="icon",
+                    status="error",
+                    prompt=prompt,
+                    negative_prompt=negative_prompt or None,
+                    model=model,
+                    width=size,
+                    height=size,
+                    cfg_scale=cfg_scale,
+                    seed=seed,
+                    style_profile_id=style_profile_id,
+                    error_message=str(exc),
+                    batch_id=batch_id,
+                )
+
+        if succeeded == len(subjects):
+            flash(f"Набор из {succeeded} иконок сгенерирован.", "success")
+        elif succeeded:
+            flash(f"Набор частично сгенерирован: {succeeded} из {len(subjects)} иконок.", "error")
+        else:
+            flash("Не удалось сгенерировать набор иконок.", "error")
+        return redirect(url_for("job_detail", job_id=last_job_id))
+
+    @app.post("/style-profiles")
+    def create_style_profile_route():
+        name = request.form.get("profile_name", "").strip()
+        style_text = request.form.get("profile_style_text", "").strip()
+        if not name or not style_text:
+            flash("Укажите название и описание стиля профиля.", "error")
+            return redirect(url_for("index"))
+        # Seed is generated once at profile-creation time and stored, so every
+        # future generation against this profile reuses the same starting
+        # noise pattern - the cheap, no-LoRA way to keep a "house style"
+        # visually anchored across many separate generations.
+        seed = uuid.uuid4().int % 1_000_000_000
+        create_style_profile(name, style_text, seed)
+        flash("Стилевой профиль создан.", "success")
+        return redirect(url_for("index"))
+
+    @app.post("/style-profiles/<int:profile_id>/delete")
+    def delete_style_profile_route(profile_id: int):
+        delete_style_profile(profile_id)
+        flash("Стилевой профиль удалён.", "success")
+        return redirect(url_for("index"))
 
     @app.post("/upscale")
     @limiter.limit("5 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
@@ -704,9 +894,30 @@ def init_db(app: Flask) -> None:
             ("cfg_scale", "ALTER TABLE jobs ADD COLUMN cfg_scale REAL"),
             ("quality", "ALTER TABLE jobs ADD COLUMN quality TEXT"),
             ("seed", "ALTER TABLE jobs ADD COLUMN seed INTEGER"),
+            # batch_id groups icons generated together as one "icon set" via
+            # /generate-icon-batch so the history view can show them as a
+            # single group instead of unrelated rows.
+            ("batch_id", "ALTER TABLE jobs ADD COLUMN batch_id TEXT"),
+            ("style_profile_id", "ALTER TABLE jobs ADD COLUMN style_profile_id INTEGER"),
         ):
             if column not in existing_columns:
                 db.execute(ddl)
+
+        # Style profiles let the user pin down a reusable look (free-text
+        # style description + a seed fixed at profile-creation time) so a
+        # whole icon set can share one consistent visual identity instead of
+        # re-describing the style by hand for every icon.
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS style_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                style_text TEXT NOT NULL,
+                seed INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
         db.commit()
 
 
@@ -748,14 +959,16 @@ def create_job(
     seed: int | None = None,
     cost_usd: float | None = None,
     error_message: str | None = None,
+    batch_id: str | None = None,
+    style_profile_id: int | None = None,
 ) -> int:
     cursor = get_db().execute(
         """
         INSERT INTO jobs (
             type, status, prompt, negative_prompt, source_file, background_file,
             result_file, model, width, height, steps, cfg_scale, quality, seed,
-            cost_usd, created_at, error_message
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            cost_usd, created_at, error_message, batch_id, style_profile_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             job_type,
@@ -775,10 +988,72 @@ def create_job(
             cost_usd,
             datetime.utcnow().isoformat(timespec="seconds"),
             error_message,
+            batch_id,
+            style_profile_id,
         ),
     )
     get_db().commit()
     return int(cursor.lastrowid)
+
+
+def list_jobs_by_batch(batch_id: str) -> list[dict]:
+    rows = get_db().execute(
+        "SELECT * FROM jobs WHERE batch_id = ? ORDER BY id ASC",
+        (batch_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_batches(limit: int = 10) -> list[dict]:
+    """Group icon-set jobs by batch_id for the history view, newest first."""
+    rows = get_db().execute(
+        """
+        SELECT batch_id, MIN(created_at) AS created_at, COUNT(*) AS icon_count
+        FROM jobs
+        WHERE batch_id IS NOT NULL
+        GROUP BY batch_id
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    batches = []
+    for row in rows:
+        batch = dict(row)
+        batch["jobs"] = list_jobs_by_batch(batch["batch_id"])
+        batches.append(batch)
+    return batches
+
+
+def list_style_profiles() -> list[dict]:
+    rows = get_db().execute(
+        "SELECT * FROM style_profiles ORDER BY id DESC",
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_style_profile(profile_id: int) -> dict | None:
+    row = get_db().execute(
+        "SELECT * FROM style_profiles WHERE id = ?", (profile_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def create_style_profile(name: str, style_text: str, seed: int) -> int:
+    cursor = get_db().execute(
+        """
+        INSERT INTO style_profiles (name, style_text, seed, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (name, style_text, seed, datetime.utcnow().isoformat(timespec="seconds")),
+    )
+    get_db().commit()
+    return int(cursor.lastrowid)
+
+
+def delete_style_profile(profile_id: int) -> None:
+    get_db().execute("DELETE FROM style_profiles WHERE id = ?", (profile_id,))
+    get_db().commit()
 
 
 def get_defaults() -> dict[str, int]:

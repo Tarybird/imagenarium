@@ -612,9 +612,9 @@
                 <input id="icon_subject" name="icon_subject" placeholder="например: иконка корзины">
               </div>
             </div>
-            <div class="row single">
+            <div class="row">
               <div>
-                <label for="icon_style">Стиль</label>
+                <label for="icon_style">Готовый стиль</label>
                 <select id="icon_style" name="icon_style">
                   <option value="flat" selected>Flat design (плоские цвета, простые формы)</option>
                   <option value="line">Line art / outline (контурная линия)</option>
@@ -622,12 +622,140 @@
                   <option value="gradient">Gradient modern (современный градиент)</option>
                 </select>
               </div>
+              <div>
+                <label for="icon_size">Размер (px)</label>
+                <select id="icon_size" name="icon_size">
+                  {% for choice in icon_size_choices %}
+                    <option value="{{ choice }}" {% if choice == default_icon_size %}selected{% endif %}>{{ choice }}&times;{{ choice }}</option>
+                  {% endfor %}
+                </select>
+              </div>
             </div>
-            <p class="hint">Подсказка для каждого стиля подставляется автоматически и комбинируется с вашим описанием. После генерации результат можно отдельно отправить в "Векторизация" выше, чтобы получить SVG.</p>
+            <div class="row single">
+              <div>
+                <label for="style_profile_id">Или свой стилевой профиль (необязательно, переопределяет готовый стиль)</label>
+                <select id="style_profile_id" name="style_profile_id">
+                  <option value="">— не использовать профиль —</option>
+                  {% for profile in style_profiles %}
+                    <option value="{{ profile.id }}">{{ profile.name }} (seed {{ profile.seed }})</option>
+                  {% endfor %}
+                </select>
+              </div>
+            </div>
+            <p class="hint">Подсказка для каждого готового стиля подставляется автоматически и комбинируется с вашим описанием. Иконки всё равно векторизуются после генерации, поэтому маленький размер не теряет качество SVG, но заметно дешевле. После генерации результат можно отдельно отправить в "Векторизация" выше, чтобы получить SVG.</p>
             <div class="actions">
               <button type="submit">Сгенерировать иконку</button>
             </div>
           </form>
+        </section>
+
+        <section class="card">
+          <h2>Стилевые профили (свой устойчивый стиль)</h2>
+          <p class="hint">Профиль фиксирует текстовое описание стиля и seed один раз при создании, чтобы все иконки этого профиля выглядели в одном узнаваемом стиле.</p>
+          <form method="post" action="{{ url_for('create_style_profile_route') }}">
+            <div class="row single">
+              <div>
+                <label for="profile_name">Название профиля</label>
+                <input id="profile_name" name="profile_name" placeholder="например: Мой пастельный стиль">
+              </div>
+            </div>
+            <div class="row single">
+              <div>
+                <label for="profile_style_text">Описание стиля</label>
+                <textarea id="profile_style_text" name="profile_style_text" rows="3" placeholder="например: плоские пастельные иконки, скруглённые углы, без теней, минимум деталей"></textarea>
+              </div>
+            </div>
+            <div class="actions">
+              <button type="submit">Создать профиль</button>
+            </div>
+          </form>
+          {% if style_profiles %}
+            <table>
+              <thead>
+                <tr>
+                  <th>Название</th>
+                  <th>Описание</th>
+                  <th>Seed</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for profile in style_profiles %}
+                  <tr>
+                    <td data-label="Название">{{ profile.name }}</td>
+                    <td data-label="Описание" class="muted">{{ profile.style_text }}</td>
+                    <td data-label="Seed">{{ profile.seed }}</td>
+                    <td>
+                      <form method="post" action="{{ url_for('delete_style_profile_route', profile_id=profile.id) }}" style="display:inline;">
+                        <button type="submit">Удалить</button>
+                      </form>
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% else %}
+            <p class="muted">Пока нет сохранённых профилей.</p>
+          {% endif %}
+        </section>
+
+        <section class="card">
+          <h2>Набор иконок (icon set)</h2>
+          <p class="hint">Введите названия иконок по одному на строку (например: корзина, профиль, настройки, поиск). Все иконки набора генерируются одним стилем/профилем подряд и помечаются как один набор в истории.</p>
+          <form method="post" action="{{ url_for('generate_icon_batch') }}">
+            <div class="row single">
+              <div>
+                <label for="batch_subjects">Список иконок (по одной на строку, максимум 12)</label>
+                <textarea id="batch_subjects" name="batch_subjects" rows="5" placeholder="корзина&#10;профиль&#10;настройки&#10;поиск"></textarea>
+              </div>
+            </div>
+            <div class="row">
+              <div>
+                <label for="batch_icon_style">Готовый стиль</label>
+                <select id="batch_icon_style" name="icon_style">
+                  <option value="flat" selected>Flat design</option>
+                  <option value="line">Line art / outline</option>
+                  <option value="isometric">Isometric</option>
+                  <option value="gradient">Gradient modern</option>
+                </select>
+              </div>
+              <div>
+                <label for="batch_icon_size">Размер (px)</label>
+                <select id="batch_icon_size" name="icon_size">
+                  {% for choice in icon_size_choices %}
+                    <option value="{{ choice }}" {% if choice == default_icon_size %}selected{% endif %}>{{ choice }}&times;{{ choice }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+            </div>
+            <div class="row single">
+              <div>
+                <label for="batch_style_profile_id">Или свой стилевой профиль (необязательно)</label>
+                <select id="batch_style_profile_id" name="style_profile_id">
+                  <option value="">— не использовать профиль —</option>
+                  {% for profile in style_profiles %}
+                    <option value="{{ profile.id }}">{{ profile.name }} (seed {{ profile.seed }})</option>
+                  {% endfor %}
+                </select>
+              </div>
+            </div>
+            <div class="actions">
+              <button type="submit">Сгенерировать набор</button>
+            </div>
+          </form>
+          {% if icon_batches %}
+            <h3 style="margin-top:1.5rem;">Наборы из истории</h3>
+            {% for batch in icon_batches %}
+              <div class="panel-inner" style="padding:0.5rem 0;">
+                <p class="muted">Набор от {{ batch.created_at }} &mdash; {{ batch.icon_count }} иконок</p>
+                <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                  {% for job in batch.jobs %}
+                    <a href="{{ url_for('job_detail', job_id=job.id) }}" class="tag">#{{ job.id }} {{ job.status }}</a>
+                  {% endfor %}
+                </div>
+              </div>
+            {% endfor %}
+          {% endif %}
         </section>
 
         <section class="card history" style="grid-column: 1 / -1;">
