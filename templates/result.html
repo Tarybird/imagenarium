@@ -218,6 +218,7 @@
             <div><strong>Источник</strong><br>{{ job.source_file or '-' }}</div>
             <div><strong>Фон</strong><br>{{ job.background_file or '-' }}</div>
             <div><strong>Размер</strong><br>{{ job.width or '-' }} x {{ job.height or '-' }}</div>
+            <div><strong>CFG / шаги</strong><br>{{ job.cfg_scale or '-' }} / {{ job.steps or '-' }}</div>
             <div><strong>Стоимость</strong><br>{{ job.cost_usd if job.cost_usd is not none else '-' }}</div>
             <div><strong>Создано</strong><br>{{ job.created_at }}</div>
             <div><strong>Ошибка</strong><br>{{ job.error_message or '-' }}</div>

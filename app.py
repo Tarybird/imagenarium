@@ -29,10 +29,82 @@ MAX_STEPS = 40
 MAX_UPSCALE_MEGAPIXELS = 4
 
 # Quality presets for /generate: "standard" keeps the requested size/steps as-is,
-# "economy" cuts resolution and step count to make draft generations cheaper.
+# "economy" cuts resolution and step count to make draft generations cheaper,
+# "test" is a minimal-cost preset for quickly sanity-checking a prompt before
+# spending a full-price generation on it.
 QUALITY_PRESETS = {
     "standard": {"dimension_factor": 1.0, "steps_factor": 1.0},
     "economy": {"dimension_factor": 0.5, "steps_factor": 0.6},
+    "test": {"dimension_factor": 0.25, "steps_factor": 0.4},
+}
+
+# Runware quantizes width/height to multiples of 64 and enforces a minimum of
+# 128px per side (https://runware.ai docs, imageInference parameters). The
+# "test" preset above can shrink a 1024px default down past that floor, so
+# the absolute minimum is clamped separately from the public-demo ceiling.
+MIN_DIMENSION = 128
+RUNWARE_DIMENSION_STEP = 64
+
+# Aspect ratio presets for the generation form. Each maps to an explicit
+# (width, height) pair at "standard" quality, already rounded to a multiple
+# of 64 and capped at MAX_DIMENSION so no extra runtime rounding is needed.
+ASPECT_RATIO_PRESETS = {
+    "1:1": (1024, 1024),
+    "16:9": (1344, 768),
+    "9:16": (768, 1344),
+    "4:3": (1152, 896),
+    "3:4": (896, 1152),
+}
+
+# Vector icon styles: each combines the user's free-text subject with a
+# hand-tuned FLUX prompt template tuned for that visual style, plus
+# generation params suited to clean icon artwork (square, lower CFG for
+# simpler/cleaner shapes than a typical photoreal CFG of 3.5-5).
+ICON_STYLE_PRESETS = {
+    "flat": {
+        "label": "Flat design",
+        "prompt_template": (
+            "flat design icon of {subject}, vector style, solid flat colors, "
+            "no gradients, no shadows, simple geometric shapes, clean bold "
+            "outlines, centered composition, white background"
+        ),
+        "negative_prompt": "photo, realistic, 3d render, gradient, texture, shadow, clutter, text, watermark",
+        "cfg_scale": 2.5,
+        "size": 1024,
+    },
+    "line": {
+        "label": "Line art / outline",
+        "prompt_template": (
+            "minimalist line art icon of {subject}, thin outline style, "
+            "single weight stroke, no fill, black lines on white background, "
+            "monochrome, simple, centered"
+        ),
+        "negative_prompt": "photo, realistic, color fill, gradient, shadow, texture, clutter, text, watermark",
+        "cfg_scale": 2.5,
+        "size": 1024,
+    },
+    "isometric": {
+        "label": "Isometric",
+        "prompt_template": (
+            "isometric icon of {subject}, 3d isometric illustration, clean "
+            "vector style, soft shadows, pastel color palette, centered, "
+            "white background"
+        ),
+        "negative_prompt": "photo, realistic, flat 2d, text, watermark, clutter",
+        "cfg_scale": 3.0,
+        "size": 1024,
+    },
+    "gradient": {
+        "label": "Gradient modern",
+        "prompt_template": (
+            "modern gradient icon of {subject}, vibrant smooth gradient "
+            "colors, rounded shapes, soft glow, contemporary app icon style, "
+            "centered, white background"
+        ),
+        "negative_prompt": "photo, realistic, flat color only, sketch, text, watermark, clutter",
+        "cfg_scale": 3.0,
+        "size": 1024,
+    },
 }
 
 # FLUX.1 [dev] (runware:101@1) is guidance-distilled: unlike SDXL it does not
@@ -67,7 +139,17 @@ def is_trusted_caller() -> bool:
 
 
 def clamp_dimension(value: int) -> int:
-    return max(256, min(MAX_DIMENSION, value))
+    return max(MIN_DIMENSION, min(MAX_DIMENSION, value))
+
+
+def quantize_dimension(value: int) -> int:
+    """Round to the nearest multiple of RUNWARE_DIMENSION_STEP, then clamp.
+
+    Runware rejects/auto-adjusts width/height that aren't multiples of 64;
+    rounding client-side avoids silent server-side resizing surprises.
+    """
+    quantized = max(RUNWARE_DIMENSION_STEP, round(value / RUNWARE_DIMENSION_STEP) * RUNWARE_DIMENSION_STEP)
+    return clamp_dimension(quantized)
 
 
 def clamp_steps(value: int) -> int:
@@ -171,16 +253,20 @@ def create_app() -> Flask:
             quality = "standard"
         preset = QUALITY_PRESETS[quality]
 
-        requested_width = parse_int(request.form.get("width"), get_default_int("DEFAULT_WIDTH", 1024))
-        requested_height = parse_int(request.form.get("height"), get_default_int("DEFAULT_HEIGHT", 1024))
+        aspect_ratio = request.form.get("aspect_ratio", "").strip()
+        if aspect_ratio in ASPECT_RATIO_PRESETS:
+            requested_width, requested_height = ASPECT_RATIO_PRESETS[aspect_ratio]
+        else:
+            requested_width = parse_int(request.form.get("width"), get_default_int("DEFAULT_WIDTH", 1024))
+            requested_height = parse_int(request.form.get("height"), get_default_int("DEFAULT_HEIGHT", 1024))
         requested_steps = parse_int(request.form.get("steps"), 30)
         requested_cfg_scale = parse_optional_float(request.form.get("cfg_scale"))
         cfg_scale = clamp_cfg_scale(
             requested_cfg_scale if requested_cfg_scale is not None else get_default_float("DEFAULT_CFG_SCALE", DEFAULT_CFG_SCALE)
         )
 
-        width = clamp_dimension(int(requested_width * preset["dimension_factor"]))
-        height = clamp_dimension(int(requested_height * preset["dimension_factor"]))
+        width = quantize_dimension(int(requested_width * preset["dimension_factor"]))
+        height = quantize_dimension(int(requested_height * preset["dimension_factor"]))
         steps = clamp_steps(int(requested_steps * preset["steps_factor"]))
         seed = parse_optional_int(request.form.get("seed"))
         model = os.environ.get("RUNWARE_TEXT_MODEL", "runware:101@1")
@@ -204,9 +290,14 @@ def create_app() -> Flask:
                 job_type="generate",
                 status="done",
                 prompt=prompt,
+                negative_prompt=negative_prompt or None,
                 model=model,
                 width=width,
                 height=height,
+                steps=steps,
+                cfg_scale=cfg_scale,
+                quality=quality,
+                seed=seed,
                 cost_usd=result.cost,
                 result_file=result.local_path,
             )
@@ -217,9 +308,14 @@ def create_app() -> Flask:
                 job_type="generate",
                 status="error",
                 prompt=prompt,
+                negative_prompt=negative_prompt or None,
                 model=model,
                 width=width,
                 height=height,
+                steps=steps,
+                cfg_scale=cfg_scale,
+                quality=quality,
+                seed=seed,
                 error_message=str(exc),
             )
             flash(f"Не удалось сгенерировать изображение: {exc}", "error")
@@ -355,6 +451,121 @@ def create_app() -> Flask:
             flash(f"Не удалось заменить фон: {exc}", "error")
             return redirect(url_for("job_detail", job_id=job_id))
 
+    @app.post("/inpaint")
+    @limiter.limit("5 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
+    def inpaint():
+        source = get_upload_or_source("image", "source_job_id")
+        prompt = request.form.get("inpaint_prompt", "").strip()
+        mask_data_url = request.form.get("mask_data_url", "").strip()
+        if source is None or not prompt or not mask_data_url:
+            flash("Загрузите изображение, выделите область на маске и опишите, что должно там быть.", "error")
+            return redirect(url_for("index"))
+
+        try:
+            source_image = Image.open(source.saved_path)
+            mask_path = save_mask_data_uri(mask_data_url, source_image.size)
+        except Exception as exc:
+            flash(f"Не удалось обработать маску: {exc}", "error")
+            return redirect(url_for("index"))
+
+        width = clamp_dimension(source_image.width)
+        height = clamp_dimension(source_image.height)
+        inpaint_model = os.environ.get("RUNWARE_INPAINT_MODEL", "runware:102@1")
+        try:
+            uploaded = runware_upload_image(source.source_uri)
+            mask_uploaded = runware_upload_image(path_to_data_uri(mask_path))
+            result = runware_inpaint(
+                prompt=prompt,
+                seed_image_uuid=uploaded.remote_uuid,
+                mask_image_uuid=mask_uploaded.remote_uuid,
+                width=width,
+                height=height,
+                model=inpaint_model,
+            )
+            job_id = create_job(
+                job_type="inpaint",
+                status="done",
+                source_file=source.saved_path,
+                prompt=prompt,
+                model=inpaint_model,
+                width=width,
+                height=height,
+                cost_usd=result.cost,
+                result_file=result.local_path,
+            )
+            flash("Область перегенерирована.", "success")
+            return redirect(url_for("job_detail", job_id=job_id))
+        except Exception as exc:
+            job_id = create_job(
+                job_type="inpaint",
+                status="error",
+                source_file=source.saved_path,
+                prompt=prompt,
+                model=inpaint_model,
+                width=width,
+                height=height,
+                error_message=str(exc),
+            )
+            flash(f"Не удалось перегенерировать область: {exc}", "error")
+            return redirect(url_for("job_detail", job_id=job_id))
+
+    @app.post("/generate-icon")
+    @limiter.limit("5 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
+    def generate_icon():
+        subject = request.form.get("icon_subject", "").strip()
+        style = request.form.get("icon_style", "").strip().lower()
+        if style not in ICON_STYLE_PRESETS:
+            style = "flat"
+        if not subject:
+            flash("Опишите, какая иконка нужна.", "error")
+            return redirect(url_for("index"))
+
+        style_preset = ICON_STYLE_PRESETS[style]
+        prompt = style_preset["prompt_template"].format(subject=subject)
+        negative_prompt = style_preset.get("negative_prompt", "")
+        cfg_scale = style_preset.get("cfg_scale", DEFAULT_CFG_SCALE)
+        size = style_preset.get("size", 1024)
+        model = os.environ.get("RUNWARE_TEXT_MODEL", "runware:101@1")
+
+        try:
+            result = runware_generate(
+                prompt=prompt,
+                negative_prompt=negative_prompt or None,
+                width=size,
+                height=size,
+                steps=30,
+                cfg_scale=cfg_scale,
+                model=model,
+            )
+            job_id = create_job(
+                job_type="icon",
+                status="done",
+                prompt=prompt,
+                negative_prompt=negative_prompt or None,
+                model=model,
+                width=size,
+                height=size,
+                cfg_scale=cfg_scale,
+                cost_usd=result.cost,
+                result_file=result.local_path,
+            )
+            flash("Иконка сгенерирована.", "success")
+            return redirect(url_for("job_detail", job_id=job_id))
+        except Exception as exc:
+            job_id = create_job(
+                job_type="icon",
+                status="error",
+                prompt=prompt,
+                negative_prompt=negative_prompt or None,
+                model=model,
+                width=size,
+                height=size,
+                cfg_scale=cfg_scale,
+                error_message=str(exc),
+            )
+            flash(f"Не удалось сгенерировать иконку: {exc}", "error")
+            return redirect(url_for("job_detail", job_id=job_id))
+
     @app.post("/upscale")
     @limiter.limit("5 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
     def upscale():
@@ -483,6 +694,19 @@ def init_db(app: Flask) -> None:
             )
             """
         )
+        # Generation parameters needed to support "regenerate with edits" from
+        # history: the original jobs table only stored prompt/model/width/
+        # height, which is not enough to repopulate the form faithfully.
+        existing_columns = {row["name"] for row in db.execute("PRAGMA table_info(jobs)").fetchall()}
+        for column, ddl in (
+            ("negative_prompt", "ALTER TABLE jobs ADD COLUMN negative_prompt TEXT"),
+            ("steps", "ALTER TABLE jobs ADD COLUMN steps INTEGER"),
+            ("cfg_scale", "ALTER TABLE jobs ADD COLUMN cfg_scale REAL"),
+            ("quality", "ALTER TABLE jobs ADD COLUMN quality TEXT"),
+            ("seed", "ALTER TABLE jobs ADD COLUMN seed INTEGER"),
+        ):
+            if column not in existing_columns:
+                db.execute(ddl)
         db.commit()
 
 
@@ -511,32 +735,43 @@ def create_job(
     job_type: str,
     status: str,
     prompt: str | None = None,
+    negative_prompt: str | None = None,
     source_file: str | None = None,
     background_file: str | None = None,
     result_file: str | None = None,
     model: str | None = None,
     width: int | None = None,
     height: int | None = None,
+    steps: int | None = None,
+    cfg_scale: float | None = None,
+    quality: str | None = None,
+    seed: int | None = None,
     cost_usd: float | None = None,
     error_message: str | None = None,
 ) -> int:
     cursor = get_db().execute(
         """
         INSERT INTO jobs (
-            type, status, prompt, source_file, background_file, result_file,
-            model, width, height, cost_usd, created_at, error_message
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            type, status, prompt, negative_prompt, source_file, background_file,
+            result_file, model, width, height, steps, cfg_scale, quality, seed,
+            cost_usd, created_at, error_message
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             job_type,
             status,
             prompt,
+            negative_prompt,
             source_file,
             background_file,
             result_file,
             model,
             width,
             height,
+            steps,
+            cfg_scale,
+            quality,
+            seed,
             cost_usd,
             datetime.utcnow().isoformat(timespec="seconds"),
             error_message,
@@ -631,6 +866,34 @@ def path_to_data_uri(path: Path) -> str:
     media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:{media_type};base64,{encoded}"
+
+def save_mask_data_uri(data_uri: str, target_size: tuple[int, int]) -> Path:
+    """Decode a canvas-drawn mask (data:image/png;base64,... from the
+    inpainting <canvas>) into a black/white PNG matching the source image
+    size, and save it to UPLOAD_DIR for upload to Runware.
+
+    The browser canvas is drawn at the displayed (CSS) size, which may not
+    match the original image's pixel dimensions, so the mask is resized
+    (nearest-neighbor, to keep edges crisp/binary) to the source size before
+    saving.
+    """
+    if "," not in data_uri:
+        raise ValueError("Некорректные данные маски")
+    header, encoded = data_uri.split(",", 1)
+    if "base64" not in header:
+        raise ValueError("Маска должна быть в формате base64")
+    raw = base64.b64decode(encoded)
+    mask_image = Image.open(io.BytesIO(raw)).convert("L")
+    if mask_image.size != target_size:
+        mask_image = mask_image.resize(target_size, Image.NEAREST)
+    # Binarize: anything painted (non-zero alpha-derived gray) becomes pure
+    # white "regenerate this" per Runware's maskImage convention; everything
+    # else becomes pure black "keep as-is".
+    mask_image = mask_image.point(lambda px: 255 if px >= 16 else 0)
+    destination = UPLOAD_DIR / f"{uuid.uuid4().hex}_mask.png"
+    mask_image.save(destination)
+    return destination
+
 
 def resize_cover(image: Image.Image, target_width: int, target_height: int) -> Image.Image:
     """Resize ``image`` to exactly (target_width, target_height) using

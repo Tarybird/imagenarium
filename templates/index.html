@@ -173,6 +173,85 @@
         color: var(--accent);
         font-size: 0.8rem;
       }
+      .subsection {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        margin: 0 18px 18px;
+        padding: 16px 18px;
+        background: rgba(255, 255, 255, 0.55);
+      }
+      .subsection + .subsection {
+        margin-top: 0;
+      }
+      .subsection-title {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 0 0 12px;
+        font-size: 1.05rem;
+        font-weight: bold;
+        color: var(--accent);
+      }
+      .subsection-title .icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        border-radius: 10px;
+        background: var(--accent);
+        color: white;
+        font-size: 1.05rem;
+        flex-shrink: 0;
+      }
+      .subsection form { padding: 0; }
+      .tabs {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 14px;
+        flex-wrap: wrap;
+      }
+      .tab-button {
+        border: 1px solid var(--line);
+        background: #fff;
+        color: var(--muted);
+        border-radius: 999px;
+        padding: 8px 14px;
+        font: inherit;
+        font-size: 0.9rem;
+        cursor: pointer;
+      }
+      .tab-button.active {
+        background: var(--accent);
+        color: white;
+        border-color: var(--accent);
+      }
+      .tab-panel { display: none; }
+      .tab-panel.active { display: block; }
+      .mask-canvas-wrap {
+        position: relative;
+        max-width: 100%;
+        border: 1px dashed var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+        background: repeating-conic-gradient(#f0f0f0 0% 25%, #ffffff 0% 50%) 50% / 16px 16px;
+      }
+      .mask-canvas-wrap canvas {
+        display: block;
+        max-width: 100%;
+        cursor: crosshair;
+      }
+      .hint { font-size: 0.85rem; color: var(--muted); margin: 6px 0 0; }
+      .history .regen-btn {
+        border: 1px solid var(--line);
+        background: #fff;
+        color: var(--accent);
+        border-radius: 8px;
+        padding: 6px 10px;
+        font: inherit;
+        font-size: 0.82rem;
+        cursor: pointer;
+      }
       @media (max-width: 1040px) {
         .hero, .forms, .row { grid-template-columns: minmax(0, 1fr); }
       }
@@ -246,6 +325,9 @@
           text-transform: uppercase;
           letter-spacing: 0;
         }
+        .subsection { margin: 0 0 14px; padding: 14px; }
+        .history .regen-btn { width: 100%; margin-top: 8px; }
+        .mask-canvas-wrap canvas { width: 100%; height: auto; }
       }
     </style>
   </head>
@@ -292,7 +374,7 @@
       <div class="forms">
         <section class="card">
           <h2>Генерация</h2>
-          <form method="post" action="{{ url_for('generate') }}">
+          <form method="post" action="{{ url_for('generate') }}" id="generate-form">
             <div class="row single">
               <div>
                 <label for="prompt">Описание (промпт)</label>
@@ -311,6 +393,19 @@
               <div>
                 <label for="cfg_scale">Точность следования промпту (CFG)</label>
                 <input id="cfg_scale" name="cfg_scale" type="number" step="0.1" min="1" max="10" placeholder="По умолчанию 3.5">
+              </div>
+            </div>
+            <div class="row single">
+              <div>
+                <label for="aspect_ratio">Пропорции</label>
+                <select id="aspect_ratio" name="aspect_ratio">
+                  <option value="">Свои ширина/высота (ниже)</option>
+                  <option value="1:1">1:1 — квадрат (1024x1024)</option>
+                  <option value="16:9">16:9 — широкий (1344x768)</option>
+                  <option value="9:16">9:16 — вертикальный (768x1344)</option>
+                  <option value="4:3">4:3 (1152x896)</option>
+                  <option value="3:4">3:4 (896x1152)</option>
+                </select>
               </div>
             </div>
             <div class="row">
@@ -337,6 +432,7 @@
                 <select id="quality" name="quality">
                   <option value="standard" selected>Стандарт (полное разрешение и число шагов)</option>
                   <option value="economy">Экономично/черновик (меньшее разрешение, меньше шагов)</option>
+                  <option value="test">Тест (мини) — для быстрой проверки промпта, низкое качество</option>
                 </select>
               </div>
             </div>
@@ -399,59 +495,137 @@
 
         <section class="card">
           <h2>Доработка</h2>
-          <form method="post" action="{{ url_for('upscale') }}" enctype="multipart/form-data">
-            <div class="row">
-              <div>
-                <label for="upscale_image">Загрузить изображение</label>
-                <input id="upscale_image" name="image" type="file" accept="image/*">
+          <div class="subsection">
+            <p class="subsection-title"><span class="icon">&#x1F50E;</span> Увеличение разрешения (Upscale)</p>
+            <form method="post" action="{{ url_for('upscale') }}" enctype="multipart/form-data">
+              <div class="row">
+                <div>
+                  <label for="upscale_image">Загрузить изображение</label>
+                  <input id="upscale_image" name="image" type="file" accept="image/*">
+                </div>
+                <div>
+                  <label for="upscale_source_job_id">Или выберите предыдущий результат</label>
+                  <select id="upscale_source_job_id" name="source_job_id">
+                    <option value="">Нет</option>
+                    {% for job in source_jobs %}
+                      {% if job.result_file %}
+                        <option value="{{ job.id }}">#{{ job.id }} - {{ job.type }}</option>
+                      {% endif %}
+                    {% endfor %}
+                  </select>
+                </div>
               </div>
+              <div class="row single">
+                <div>
+                  <label for="target_megapixels">Целевое разрешение</label>
+                  <select id="target_megapixels" name="target_megapixels">
+                    <option value="4" selected>4 МП</option>
+                    <option value="6">6 МП</option>
+                    <option value="8">8 МП</option>
+                  </select>
+                </div>
+              </div>
+              <div class="actions">
+                <button type="submit">Увеличить</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="subsection">
+            <p class="subsection-title"><span class="icon">&#x270F;</span> Векторизация (растр &rarr; SVG)</p>
+            <form method="post" action="{{ url_for('vectorize') }}" enctype="multipart/form-data">
+              <div class="row">
+                <div>
+                  <label for="vector_image">Изображение для векторизации</label>
+                  <input id="vector_image" name="image" type="file" accept="image/*">
+                </div>
+                <div>
+                  <label for="vector_source_job_id">Или выберите предыдущий результат</label>
+                  <select id="vector_source_job_id" name="source_job_id">
+                    <option value="">Нет</option>
+                    {% for job in source_jobs %}
+                      {% if job.result_file %}
+                        <option value="{{ job.id }}">#{{ job.id }} - {{ job.type }}</option>
+                      {% endif %}
+                    {% endfor %}
+                  </select>
+                </div>
+              </div>
+              <div class="actions">
+                <button type="submit" class="secondary">Векторизовать</button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Перегенерация области (inpainting)</h2>
+          <form method="post" action="{{ url_for('inpaint') }}" enctype="multipart/form-data" id="inpaint-form">
+            <div class="row single">
               <div>
-                <label for="upscale_source_job_id">Или выберите предыдущий результат</label>
-                <select id="upscale_source_job_id" name="source_job_id">
+                <label for="inpaint_image">Изображение</label>
+                <input id="inpaint_image" name="image" type="file" accept="image/*">
+                <p class="hint">Загрузите файл, затем выделите прямоугольную область мышью на превью ниже — она будет перегенерирована.</p>
+              </div>
+            </div>
+            <div class="row single">
+              <div>
+                <label for="inpaint_source_job_id">Или выберите предыдущий результат как источник</label>
+                <select id="inpaint_source_job_id" name="source_job_id">
                   <option value="">Нет</option>
                   {% for job in source_jobs %}
                     {% if job.result_file %}
-                      <option value="{{ job.id }}">#{{ job.id }} - {{ job.type }}</option>
+                      <option value="{{ job.id }}" data-url="{{ url_for('media', job_id=job.id) }}">#{{ job.id }} - {{ job.type }}</option>
                     {% endif %}
                   {% endfor %}
                 </select>
               </div>
             </div>
             <div class="row single">
+              <div class="mask-canvas-wrap">
+                <canvas id="inpaint-canvas" width="600" height="400"></canvas>
+              </div>
+              <p class="hint">Кликните и потяните, чтобы отметить область (красным) для перегенерации. Кнопка "Очистить выделение" сбрасывает область.</p>
+              <div class="actions">
+                <button type="button" class="secondary" id="inpaint-clear-mask">Очистить выделение</button>
+              </div>
+              <input type="hidden" name="mask_data_url" id="inpaint-mask-data-url">
+            </div>
+            <div class="row single">
               <div>
-                <label for="target_megapixels">Целевое разрешение</label>
-                <select id="target_megapixels" name="target_megapixels">
-                  <option value="4" selected>4 МП</option>
-                  <option value="6">6 МП</option>
-                  <option value="8">8 МП</option>
-                </select>
+                <label for="inpaint_prompt">Что должно быть в этой области</label>
+                <input id="inpaint_prompt" name="inpaint_prompt" placeholder="например: красная роза вместо тюльпана">
               </div>
             </div>
             <div class="actions">
-              <button type="submit">Увеличить</button>
+              <button type="submit">Применить</button>
             </div>
           </form>
+        </section>
 
-          <form method="post" action="{{ url_for('vectorize') }}" enctype="multipart/form-data" style="padding-top: 0;">
-            <div class="row">
+        <section class="card">
+          <h2>Векторные иконки</h2>
+          <form method="post" action="{{ url_for('generate_icon') }}">
+            <div class="row single">
               <div>
-                <label for="vector_image">Изображение для векторизации</label>
-                <input id="vector_image" name="image" type="file" accept="image/*">
+                <label for="icon_subject">Что изобразить</label>
+                <input id="icon_subject" name="icon_subject" placeholder="например: иконка корзины">
               </div>
+            </div>
+            <div class="row single">
               <div>
-                <label for="vector_source_job_id">Или выберите предыдущий результат</label>
-                <select id="vector_source_job_id" name="source_job_id">
-                  <option value="">Нет</option>
-                  {% for job in source_jobs %}
-                    {% if job.result_file %}
-                      <option value="{{ job.id }}">#{{ job.id }} - {{ job.type }}</option>
-                    {% endif %}
-                  {% endfor %}
+                <label for="icon_style">Стиль</label>
+                <select id="icon_style" name="icon_style">
+                  <option value="flat" selected>Flat design (плоские цвета, простые формы)</option>
+                  <option value="line">Line art / outline (контурная линия)</option>
+                  <option value="isometric">Isometric (изометрия, объём)</option>
+                  <option value="gradient">Gradient modern (современный градиент)</option>
                 </select>
               </div>
             </div>
-            <div class="actions refine-actions">
-              <button type="submit" class="secondary">Векторизовать</button>
+            <p class="hint">Подсказка для каждого стиля подставляется автоматически и комбинируется с вашим описанием. После генерации результат можно отдельно отправить в "Векторизация" выше, чтобы получить SVG.</p>
+            <div class="actions">
+              <button type="submit">Сгенерировать иконку</button>
             </div>
           </form>
         </section>
@@ -482,6 +656,19 @@
                       {% else %}
                         <span class="muted">-</span>
                       {% endif %}
+                      {% if job.type == 'generate' and job.prompt %}
+                        <button
+                          type="button"
+                          class="regen-btn"
+                          data-regen-prompt="{{ job.prompt }}"
+                          data-regen-negative-prompt="{{ job.negative_prompt or '' }}"
+                          data-regen-width="{{ job.width or '' }}"
+                          data-regen-height="{{ job.height or '' }}"
+                          data-regen-cfg-scale="{{ job.cfg_scale or '' }}"
+                          data-regen-seed="{{ job.seed or '' }}"
+                          data-regen-quality="{{ job.quality or 'standard' }}"
+                        >Перегенерировать</button>
+                      {% endif %}
                     </td>
                   </tr>
                 {% else %}
@@ -495,5 +682,180 @@
         </section>
       </div>
     </div>
+
+    <script>
+      (function () {
+        "use strict";
+
+        // --- Regenerate from history: fill the generate form with the
+        // stored job's prompt/params so the user can tweak before resubmitting.
+        document.querySelectorAll(".regen-btn").forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            var form = document.getElementById("generate-form");
+            if (!form) return;
+            var setVal = function (id, value) {
+              var el = document.getElementById(id);
+              if (el && value !== undefined) el.value = value;
+            };
+            setVal("prompt", btn.dataset.regenPrompt || "");
+            setVal("negative_prompt", btn.dataset.regenNegativePrompt || "");
+            setVal("cfg_scale", btn.dataset.regenCfgScale || "");
+            setVal("seed", btn.dataset.regenSeed || "");
+            var widthSelect = document.getElementById("width");
+            var heightSelect = document.getElementById("height");
+            var aspectSelect = document.getElementById("aspect_ratio");
+            if (aspectSelect) aspectSelect.value = "";
+            if (widthSelect && btn.dataset.regenWidth) {
+              if (![].some.call(widthSelect.options, function (o) { return o.value === btn.dataset.regenWidth; })) {
+                var opt = document.createElement("option");
+                opt.value = btn.dataset.regenWidth;
+                opt.textContent = btn.dataset.regenWidth;
+                widthSelect.appendChild(opt);
+              }
+              widthSelect.value = btn.dataset.regenWidth;
+            }
+            if (heightSelect && btn.dataset.regenHeight) {
+              if (![].some.call(heightSelect.options, function (o) { return o.value === btn.dataset.regenHeight; })) {
+                var opt2 = document.createElement("option");
+                opt2.value = btn.dataset.regenHeight;
+                opt2.textContent = btn.dataset.regenHeight;
+                heightSelect.appendChild(opt2);
+              }
+              heightSelect.value = btn.dataset.regenHeight;
+            }
+            var qualitySelect = document.getElementById("quality");
+            if (qualitySelect && btn.dataset.regenQuality) qualitySelect.value = btn.dataset.regenQuality;
+            form.scrollIntoView({ behavior: "smooth", block: "start" });
+            var promptEl = document.getElementById("prompt");
+            if (promptEl) promptEl.focus();
+          });
+        });
+
+        // --- Aspect ratio preset disables manual width/height to avoid
+        // ambiguity about which one wins (server prefers aspect_ratio).
+        var aspectSelect = document.getElementById("aspect_ratio");
+        var widthSelect = document.getElementById("width");
+        var heightSelect = document.getElementById("height");
+        if (aspectSelect && widthSelect && heightSelect) {
+          aspectSelect.addEventListener("change", function () {
+            var disabled = aspectSelect.value !== "";
+            widthSelect.disabled = disabled;
+            heightSelect.disabled = disabled;
+          });
+        }
+
+        // --- Inpainting mask canvas: draw the source image, let the user
+        // drag out a rectangle, and serialize a black/white mask matching
+        // the image's pixel size as a hidden form field.
+        var canvas = document.getElementById("inpaint-canvas");
+        if (canvas) {
+          var ctx = canvas.getContext("2d");
+          var maskInput = document.getElementById("inpaint-mask-data-url");
+          var clearBtn = document.getElementById("inpaint-clear-mask");
+          var fileInput = document.getElementById("inpaint_image");
+          var sourceJobSelect = document.getElementById("inpaint_source_job_id");
+          var sourceImage = null;
+          var naturalWidth = 0;
+          var naturalHeight = 0;
+          var selection = null;
+          var dragStart = null;
+
+          function loadImageOnCanvas(url) {
+            var img = new Image();
+            img.crossOrigin = "anonymous";
+            img.onload = function () {
+              sourceImage = img;
+              naturalWidth = img.naturalWidth;
+              naturalHeight = img.naturalHeight;
+              var maxWidth = 600;
+              var scale = Math.min(1, maxWidth / naturalWidth);
+              canvas.width = Math.round(naturalWidth * scale);
+              canvas.height = Math.round(naturalHeight * scale);
+              selection = null;
+              redraw();
+            };
+            img.src = url;
+          }
+
+          fileInput.addEventListener("change", function () {
+            var file = fileInput.files && fileInput.files[0];
+            if (!file) return;
+            var reader = new FileReader();
+            reader.onload = function (e) { loadImageOnCanvas(e.target.result); };
+            reader.readAsDataURL(file);
+          });
+
+          sourceJobSelect.addEventListener("change", function () {
+            var option = sourceJobSelect.options[sourceJobSelect.selectedIndex];
+            var url = option && option.dataset ? option.dataset.url : null;
+            if (url) loadImageOnCanvas(url);
+          });
+
+          function redraw() {
+            if (!sourceImage) return;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(sourceImage, 0, 0, canvas.width, canvas.height);
+            if (selection) {
+              ctx.fillStyle = "rgba(220, 38, 38, 0.45)";
+              ctx.fillRect(selection.x, selection.y, selection.w, selection.h);
+              ctx.strokeStyle = "rgba(220, 38, 38, 0.9)";
+              ctx.lineWidth = 2;
+              ctx.strokeRect(selection.x, selection.y, selection.w, selection.h);
+            }
+            updateMaskDataUrl();
+          }
+
+          function pointerPos(evt) {
+            var rect = canvas.getBoundingClientRect();
+            var clientX = evt.touches ? evt.touches[0].clientX : evt.clientX;
+            var clientY = evt.touches ? evt.touches[0].clientY : evt.clientY;
+            return {
+              x: Math.max(0, Math.min(canvas.width, clientX - rect.left)),
+              y: Math.max(0, Math.min(canvas.height, clientY - rect.top)),
+            };
+          }
+
+          canvas.addEventListener("mousedown", function (evt) {
+            if (!sourceImage) return;
+            dragStart = pointerPos(evt);
+          });
+          canvas.addEventListener("mousemove", function (evt) {
+            if (!sourceImage || !dragStart) return;
+            var pos = pointerPos(evt);
+            selection = {
+              x: Math.min(dragStart.x, pos.x),
+              y: Math.min(dragStart.y, pos.y),
+              w: Math.abs(pos.x - dragStart.x),
+              h: Math.abs(pos.y - dragStart.y),
+            };
+            redraw();
+          });
+          window.addEventListener("mouseup", function () { dragStart = null; });
+
+          function updateMaskDataUrl() {
+            if (!naturalWidth || !naturalHeight) {
+              maskInput.value = "";
+              return;
+            }
+            var maskCanvas = document.createElement("canvas");
+            maskCanvas.width = canvas.width;
+            maskCanvas.height = canvas.height;
+            var maskCtx = maskCanvas.getContext("2d");
+            maskCtx.fillStyle = "black";
+            maskCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+            if (selection && selection.w > 0 && selection.h > 0) {
+              maskCtx.fillStyle = "white";
+              maskCtx.fillRect(selection.x, selection.y, selection.w, selection.h);
+            }
+            maskInput.value = maskCanvas.toDataURL("image/png");
+          }
+
+          clearBtn.addEventListener("click", function () {
+            selection = null;
+            redraw();
+          });
+        }
+      })();
+    </script>
   </body>
 </html>
