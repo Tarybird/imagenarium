@@ -16,12 +16,15 @@
         --error: #b42318;
       }
       * { box-sizing: border-box; }
+      html { font-size: clamp(17px, 1.3vw, 19px); }
       body {
         margin: 0;
+        line-height: 1.55;
         font-family: Georgia, "Times New Roman", serif;
         color: var(--text);
         background: var(--bg);
       }
+      a { color: var(--accent); }
       .shell { max-width: 1280px; margin: 0 auto; padding: 28px; }
       .panel {
         background: rgba(255, 250, 241, 0.94);
@@ -52,6 +55,11 @@
         height: auto;
         background: white;
       }
+      .media object {
+        display: block;
+        width: 100%;
+        min-height: 640px;
+      }
       .meta { padding: 18px; }
       .meta h2, .history h2 { margin-top: 0; }
       .kv { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 0.95rem; }
@@ -60,6 +68,8 @@
         border: 1px solid var(--line);
         border-radius: 12px;
         background: rgba(255,255,255,0.7);
+        overflow-wrap: anywhere;
+        word-break: break-word;
       }
       .muted { color: var(--muted); }
       .tag {
@@ -80,6 +90,7 @@
         text-decoration: none;
         background: var(--accent);
         color: white;
+        min-height: 46px;
       }
       a.button.secondary { background: white; color: var(--accent); border: 1px solid var(--line); }
       .notice {
@@ -100,9 +111,65 @@
         padding: 10px 12px;
         border-top: 1px solid var(--line);
         vertical-align: top;
+        overflow-wrap: anywhere;
+        word-break: break-word;
       }
+      .history-wrap { overflow-x: auto; }
       @media (max-width: 980px) {
-        .main, .kv { grid-template-columns: 1fr; }
+        .main, .kv { grid-template-columns: minmax(0, 1fr); }
+      }
+      @media (max-width: 760px) {
+        html { font-size: 18px; }
+        body { line-height: 1.5; }
+        .shell { padding: 12px; }
+        .panel, .media, .meta, .history { border-radius: 12px; }
+        .top { padding: 16px; }
+        .top h1 { font-size: clamp(1.8rem, 10vw, 2.4rem); line-height: 1.05; }
+        .main { gap: 14px; margin-top: 14px; }
+        .meta { padding: 16px; }
+        .meta h2, .history h2 { font-size: 1.2rem; }
+        .actions {
+          flex-direction: column;
+          gap: 9px;
+          width: 100%;
+          margin-top: 14px;
+        }
+        a.button { width: 100%; }
+        .kv { gap: 10px; }
+        .kv div {
+          border-radius: 10px;
+          padding: 12px 13px;
+        }
+        .media img { max-height: 74vh; object-fit: contain; }
+        .media object { min-height: 360px; }
+        .history h2 { padding: 16px 16px 2px !important; }
+        .history-wrap { overflow-x: visible; }
+        table,
+        thead,
+        tbody,
+        th,
+        td,
+        tr { display: block; width: 100%; }
+        thead { display: none; }
+        tr {
+          border-top: 1px solid var(--line);
+          padding: 12px 0;
+          background: rgba(255,255,255,0.48);
+        }
+        tr + tr { margin-top: 8px; }
+        td {
+          border: 0;
+          padding: 6px 16px;
+        }
+        td::before {
+          content: attr(data-label);
+          display: block;
+          font-size: 0.78rem;
+          color: var(--muted);
+          margin-bottom: 3px;
+          text-transform: uppercase;
+          letter-spacing: 0;
+        }
       }
     </style>
   </head>
@@ -135,7 +202,7 @@
       <div class="main">
         <section class="media">
           {% if job.result_file and job.result_file.endswith('.svg') %}
-            <object data="{{ url_for('media', job_id=job.id) }}" type="image/svg+xml" style="width: 100%; min-height: 640px;"></object>
+            <object data="{{ url_for('media', job_id=job.id) }}" type="image/svg+xml"></object>
           {% elif job.result_file %}
             <img src="{{ url_for('media', job_id=job.id) }}" alt="Result image">
           {% else %}
@@ -159,6 +226,7 @@
 
         <section class="history" style="grid-column: 1 / -1;">
           <h2 style="padding: 18px 18px 0; margin-bottom: 0;">Recent Jobs</h2>
+          <div class="history-wrap">
           <table>
             <thead>
               <tr>
@@ -172,15 +240,16 @@
             <tbody>
               {% for item in jobs %}
                 <tr>
-                  <td>#{{ item.id }}</td>
-                  <td><span class="tag">{{ item.type }}</span></td>
-                  <td>{{ item.status }}</td>
-                  <td class="muted">{{ item.prompt or '-' }}</td>
-                  <td><a href="{{ url_for('job_detail', job_id=item.id) }}">View</a></td>
+                  <td data-label="ID">#{{ item.id }}</td>
+                  <td data-label="Type"><span class="tag">{{ item.type }}</span></td>
+                  <td data-label="Status">{{ item.status }}</td>
+                  <td data-label="Prompt" class="muted">{{ item.prompt or '-' }}</td>
+                  <td data-label="Open"><a href="{{ url_for('job_detail', job_id=item.id) }}">View</a></td>
                 </tr>
               {% endfor %}
             </tbody>
           </table>
+          </div>
         </section>
       </div>
     </div>

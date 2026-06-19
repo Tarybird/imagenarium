@@ -18,8 +18,10 @@
         --error: #b42318;
       }
       * { box-sizing: border-box; }
+      html { font-size: clamp(17px, 1.3vw, 19px); }
       body {
         margin: 0;
+        line-height: 1.55;
         font-family: Georgia, "Times New Roman", serif;
         color: var(--text);
         background:
@@ -28,6 +30,7 @@
           radial-gradient(circle at top right, rgba(93,47,31,0.14), transparent 28%),
           var(--bg);
       }
+      a { color: var(--accent); }
       .shell {
         max-width: 1320px;
         margin: 0 auto;
@@ -115,6 +118,10 @@
         gap: 10px;
         margin-top: 14px;
       }
+      .refine-actions {
+        padding: 0 18px 18px;
+        margin-top: 0;
+      }
       button, .button {
         display: inline-flex;
         align-items: center;
@@ -128,6 +135,7 @@
         font: inherit;
         text-decoration: none;
         cursor: pointer;
+        min-height: 46px;
       }
       .button.secondary, button.secondary { background: #fff; color: var(--accent); border: 1px solid var(--line); }
       .button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); }
@@ -151,6 +159,11 @@
         vertical-align: top;
         text-align: left;
       }
+      .history td {
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+      .history-wrap { overflow-x: auto; }
       .muted { color: var(--muted); }
       .tag {
         display: inline-block;
@@ -161,7 +174,78 @@
         font-size: 0.8rem;
       }
       @media (max-width: 1040px) {
-        .hero, .forms, .row { grid-template-columns: 1fr; }
+        .hero, .forms, .row { grid-template-columns: minmax(0, 1fr); }
+      }
+      @media (max-width: 760px) {
+        html { font-size: 18px; }
+        body { line-height: 1.5; }
+        .shell { padding: 12px; }
+        .hero, .forms, .grid { gap: 14px; }
+        .hero > *, .forms > * { min-width: 0; }
+        .hero { margin-bottom: 14px; }
+        .panel, .card { border-radius: 12px; }
+        .panel-inner { padding: 16px; }
+        h1 { font-size: clamp(2rem, 11vw, 2.6rem); line-height: 1; }
+        .lede { font-size: 1rem; }
+        .chips { gap: 6px; margin-top: 14px; }
+        .chip { padding: 7px 9px; font-size: 0.82rem; }
+        .card h2 {
+          padding: 15px 16px 11px;
+          font-size: 1.18rem;
+        }
+        .card form { padding: 16px; }
+        .row { gap: 14px; margin-bottom: 14px; }
+        label { font-size: 0.9rem; margin-bottom: 7px; }
+        textarea, input, select {
+          min-height: 48px;
+          border-radius: 10px;
+          padding: 13px 14px;
+          font-size: 1rem;
+        }
+        textarea { min-height: 156px; }
+        input[type="file"] { padding: 10px; }
+        .actions {
+          flex-direction: column;
+          gap: 9px;
+          margin-top: 16px;
+        }
+        .refine-actions {
+          padding: 0;
+          margin-top: 16px;
+        }
+        button, .button { width: 100%; }
+        .notice {
+          border-radius: 10px;
+          padding: 13px 14px;
+          margin-bottom: 12px;
+        }
+        .history-wrap { overflow-x: visible; }
+        .history table,
+        .history thead,
+        .history tbody,
+        .history th,
+        .history td,
+        .history tr { display: block; width: 100%; }
+        .history thead { display: none; }
+        .history tr {
+          border-top: 1px solid var(--line);
+          padding: 12px 0;
+          background: rgba(255,255,255,0.48);
+        }
+        .history tr + tr { margin-top: 8px; }
+        .history td {
+          border: 0;
+          padding: 6px 16px;
+        }
+        .history td::before {
+          content: attr(data-label);
+          display: block;
+          font-size: 0.78rem;
+          color: var(--muted);
+          margin-bottom: 3px;
+          text-transform: uppercase;
+          letter-spacing: 0;
+        }
       }
     </style>
   </head>
@@ -353,7 +437,7 @@
                 </select>
               </div>
             </div>
-            <div class="actions" style="padding: 0 18px 18px;">
+            <div class="actions refine-actions">
               <button type="submit" class="secondary">Vectorize</button>
             </div>
           </form>
@@ -361,7 +445,7 @@
 
         <section class="card history" style="grid-column: 1 / -1;">
           <h2>History</h2>
-          <div class="panel-inner" style="padding-top: 0;">
+          <div class="panel-inner history-wrap" style="padding-top: 0;">
             <table>
               <thead>
                 <tr>
@@ -375,11 +459,11 @@
               <tbody>
                 {% for job in jobs %}
                   <tr>
-                    <td>#{{ job.id }}</td>
-                    <td><span class="tag">{{ job.type }}</span></td>
-                    <td>{{ job.status }}</td>
-                    <td class="muted">{{ job.prompt or '-' }}</td>
-                    <td>
+                    <td data-label="ID">#{{ job.id }}</td>
+                    <td data-label="Type"><span class="tag">{{ job.type }}</span></td>
+                    <td data-label="Status">{{ job.status }}</td>
+                    <td data-label="Prompt" class="muted">{{ job.prompt or '-' }}</td>
+                    <td data-label="Result">
                       {% if job.result_file %}
                         <a href="{{ url_for('job_detail', job_id=job.id) }}">Open</a>
                       {% else %}

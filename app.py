@@ -14,10 +14,44 @@ from urllib.parse import urlparse
 import requests
 from dotenv import load_dotenv
 from flask import Flask, flash, g, redirect, render_template, request, send_from_directory, url_for
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from PIL import Image
 
 
 load_dotenv()
+
+
+# Hard ceilings on paid-API inputs so a public demo cannot be abused into
+# expensive calls (very large images, huge upscales, absurd step counts).
+MAX_DIMENSION = 1536
+MAX_STEPS = 40
+MAX_UPSCALE_MEGAPIXELS = 4
+
+# Demo mode caps request volume on a public deployment. A holder of
+# DEMO_ACCESS_TOKEN (sent as header X-Demo-Token or form field access_token)
+# is treated as a trusted/own user and exempted from the stricter public
+# rate limits below.
+DEMO_ACCESS_TOKEN = os.environ.get("DEMO_ACCESS_TOKEN", "").strip()
+
+
+def is_trusted_caller() -> bool:
+    if not DEMO_ACCESS_TOKEN:
+        return False
+    supplied = (request.headers.get("X-Demo-Token") or request.form.get("access_token") or "").strip()
+    return bool(supplied) and supplied == DEMO_ACCESS_TOKEN
+
+
+def clamp_dimension(value: int) -> int:
+    return max(256, min(MAX_DIMENSION, value))
+
+
+def clamp_steps(value: int) -> int:
+    return max(1, min(MAX_STEPS, value))
+
+
+def clamp_megapixels(value: int) -> int:
+    return max(1, min(MAX_UPSCALE_MEGAPIXELS, value))
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -39,6 +73,26 @@ def create_app() -> Flask:
         directory.mkdir(parents=True, exist_ok=True)
 
     init_db(app)
+
+    # Per-IP rate limiting protects the paid Runware API from abuse on a
+    # public demo. Holders of DEMO_ACCESS_TOKEN (see is_trusted_caller) are
+    # exempt, since they are treated as the trusted operator, not the public.
+    limiter = Limiter(
+        get_remote_address,
+        app=app,
+        storage_uri="memory://",
+        default_limits=[],
+    )
+    app.extensions["paid_api_exempt"] = is_trusted_caller
+
+    @app.errorhandler(429)
+    def rate_limit_exceeded(_exc):
+        flash(
+            "Demo rate limit reached for this IP (a small number of paid Runware "
+            "calls per hour). Please try again later.",
+            "error",
+        )
+        return redirect(url_for("index")), 429
 
     @app.teardown_appcontext
     def close_db(_exception: Exception | None) -> None:
@@ -84,12 +138,14 @@ def create_app() -> Flask:
         return send_from_directory(path.parent, path.name)
 
     @app.post("/generate")
+    @limiter.limit("5 per hour", exempt_when=is_trusted_caller)
+    @limiter.limit("20 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
     def generate():
         prompt = request.form.get("prompt", "").strip()
         negative_prompt = request.form.get("negative_prompt", "").strip()
-        width = parse_int(request.form.get("width"), get_default_int("DEFAULT_WIDTH", 1024))
-        height = parse_int(request.form.get("height"), get_default_int("DEFAULT_HEIGHT", 1024))
-        steps = parse_int(request.form.get("steps"), 30)
+        width = clamp_dimension(parse_int(request.form.get("width"), get_default_int("DEFAULT_WIDTH", 1024)))
+        height = clamp_dimension(parse_int(request.form.get("height"), get_default_int("DEFAULT_HEIGHT", 1024)))
+        steps = clamp_steps(parse_int(request.form.get("steps"), 30))
         seed = parse_optional_int(request.form.get("seed"))
         model = os.environ.get("RUNWARE_TEXT_MODEL", "runware:101@1")
 
@@ -133,6 +189,8 @@ def create_app() -> Flask:
             return redirect(url_for("job_detail", job_id=job_id))
 
     @app.post("/remove-background")
+    @limiter.limit("5 per hour", exempt_when=is_trusted_caller)
+    @limiter.limit("20 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
     def remove_background():
         source = get_upload_or_source("image", "source_job_id")
         if source is None:
@@ -165,11 +223,13 @@ def create_app() -> Flask:
             return redirect(url_for("job_detail", job_id=job_id))
 
     @app.post("/replace-background-prompt")
+    @limiter.limit("5 per hour", exempt_when=is_trusted_caller)
+    @limiter.limit("20 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
     def replace_background_prompt():
         source = get_upload_or_source("image", "source_job_id")
         prompt = request.form.get("background_prompt", "").strip()
-        width = parse_int(request.form.get("width"), get_default_int("DEFAULT_WIDTH", 1024))
-        height = parse_int(request.form.get("height"), get_default_int("DEFAULT_HEIGHT", 1024))
+        width = clamp_dimension(parse_int(request.form.get("width"), get_default_int("DEFAULT_WIDTH", 1024)))
+        height = clamp_dimension(parse_int(request.form.get("height"), get_default_int("DEFAULT_HEIGHT", 1024)))
         if source is None or not prompt:
             flash("Upload an image and describe the background.", "error")
             return redirect(url_for("index"))
@@ -219,6 +279,8 @@ def create_app() -> Flask:
             return redirect(url_for("job_detail", job_id=job_id))
 
     @app.post("/replace-background-image")
+    @limiter.limit("5 per hour", exempt_when=is_trusted_caller)
+    @limiter.limit("20 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
     def replace_background_image():
         source = get_upload_or_source("image", "source_job_id")
         background_source = get_upload_or_source("background_image", "background_job_id")
@@ -259,6 +321,8 @@ def create_app() -> Flask:
             return redirect(url_for("job_detail", job_id=job_id))
 
     @app.post("/upscale")
+    @limiter.limit("5 per hour", exempt_when=is_trusted_caller)
+    @limiter.limit("20 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
     def upscale():
         source = get_upload_or_source("image", "source_job_id")
         if source is None:
@@ -266,7 +330,7 @@ def create_app() -> Flask:
             return redirect(url_for("index"))
 
         model = os.environ.get("RUNWARE_UPSCALE_MODEL", "prunaai:p-image@upscale")
-        target_megapixels = parse_int(request.form.get("target_megapixels"), 4)
+        target_megapixels = clamp_megapixels(parse_int(request.form.get("target_megapixels"), 4))
         try:
             uploaded = runware_upload_image(source.source_uri)
             result = runware_upscale(uploaded.remote_uuid, model=model, target_megapixels=target_megapixels)
@@ -292,6 +356,8 @@ def create_app() -> Flask:
             return redirect(url_for("job_detail", job_id=job_id))
 
     @app.post("/vectorize")
+    @limiter.limit("5 per hour", exempt_when=is_trusted_caller)
+    @limiter.limit("20 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
     def vectorize():
         source = get_upload_or_source("image", "source_job_id")
         if source is None:
@@ -342,9 +408,6 @@ def create_app() -> Flask:
         return send_from_directory(path.parent, path.name, as_attachment=True)
 
     return app
-
-
-app = create_app()
 
 
 @dataclass
@@ -756,6 +819,9 @@ def runware_vectorize(source_uri: str, *, model: str) -> RunwareResult:
     local_path = VECTORS_DIR / local_name
     download_remote_image(str(image_url), local_path)
     return RunwareResult(remote_url=str(image_url), local_path=str(local_path), cost=item.get("cost"))
+
+
+app = create_app()
 
 
 if __name__ == "__main__":

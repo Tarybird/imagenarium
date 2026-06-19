@@ -10,5 +10,6 @@ generated/
 edited/
 upscaled/
 vectors/
+server*.log
 .DS_Store
 Thumbs.db
