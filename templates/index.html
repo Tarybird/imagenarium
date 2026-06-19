@@ -256,8 +256,8 @@
           <div class="panel-inner">
             <h1>Imagenarium</h1>
             <p class="lede">
-              Single-user image studio for generation, background editing, upscaling, and vectorization through Runware.
-              The workflow stays simple: make a draft, refine the winner, and export stock-ready assets.
+              Студия изображений для генерации, обработки фона, увеличения и векторизации через Runware.
+              Процесс простой: сделать черновик, доработать лучший вариант и экспортировать результат.
             </p>
             <div class="chips">
               <span class="chip">Runware</span>
@@ -270,12 +270,12 @@
         <section class="panel">
           <div class="panel-inner">
             <div class="notice">
-              <strong>Defaults</strong>
-              <div class="muted">1024 x 1024, FLUX.1 [dev], upscale only on selected results, vectorize only when SVG really helps.</div>
+              <strong>Настройки по умолчанию</strong>
+              <div class="muted">1024 x 1024, FLUX.1 [dev], увеличение только для выбранных результатов, векторизация — когда действительно нужен SVG.</div>
             </div>
             <div class="notice">
-              <strong>Current setup</strong>
-              <div class="muted">Single user, local history, local files, and one provider.</div>
+              <strong>Лимиты</strong>
+              <div class="muted">Не более 5 платных запросов в сутки с одного IP (генерация, фон, увеличение, векторизация — суммарно).</div>
             </div>
           </div>
         </section>
@@ -291,27 +291,27 @@
 
       <div class="forms">
         <section class="card">
-          <h2>Generate</h2>
+          <h2>Генерация</h2>
           <form method="post" action="{{ url_for('generate') }}">
             <div class="row single">
               <div>
-                <label for="prompt">Prompt</label>
-                <textarea id="prompt" name="prompt" placeholder="Describe the image..."></textarea>
+                <label for="prompt">Описание (промпт)</label>
+                <textarea id="prompt" name="prompt" placeholder="Опишите изображение..."></textarea>
               </div>
             </div>
             <div class="row">
               <div>
-                <label for="negative_prompt">Negative prompt</label>
-                <input id="negative_prompt" name="negative_prompt" placeholder="Optional">
+                <label for="negative_prompt">Негативный промпт</label>
+                <input id="negative_prompt" name="negative_prompt" placeholder="Необязательно">
               </div>
               <div>
                 <label for="seed">Seed</label>
-                <input id="seed" name="seed" type="number" placeholder="Optional">
+                <input id="seed" name="seed" type="number" placeholder="Необязательно">
               </div>
             </div>
             <div class="row">
               <div>
-                <label for="width">Width</label>
+                <label for="width">Ширина</label>
                 <select id="width" name="width">
                   <option value="1024" {% if defaults.width == 1024 %}selected{% endif %}>1024</option>
                   <option value="1536">1536</option>
@@ -319,7 +319,7 @@
                 </select>
               </div>
               <div>
-                <label for="height">Height</label>
+                <label for="height">Высота</label>
                 <select id="height" name="height">
                   <option value="1024" {% if defaults.height == 1024 %}selected{% endif %}>1024</option>
                   <option value="1536">1536</option>
@@ -327,26 +327,35 @@
                 </select>
               </div>
             </div>
+            <div class="row single">
+              <div>
+                <label for="quality">Качество</label>
+                <select id="quality" name="quality">
+                  <option value="standard" selected>Стандарт (полное разрешение и число шагов)</option>
+                  <option value="economy">Экономично/черновик (меньшее разрешение, меньше шагов)</option>
+                </select>
+              </div>
+            </div>
             <div class="actions">
-              <button type="submit">Generate</button>
+              <button type="submit">Сгенерировать</button>
             </div>
           </form>
         </section>
 
         <section class="card">
-          <h2>Background Tools</h2>
+          <h2>Работа с фоном</h2>
           <form method="post" action="{{ url_for('remove_background') }}" enctype="multipart/form-data">
             <div class="row single">
               <div>
-                <label for="image">Source image</label>
+                <label for="image">Исходное изображение</label>
                 <input id="image" name="image" type="file" accept="image/*">
               </div>
             </div>
             <div class="row">
               <div>
-                <label for="source_job_id">Or choose previous result</label>
+                <label for="source_job_id">Или выберите предыдущий результат</label>
                 <select id="source_job_id" name="source_job_id">
-                  <option value="">None</option>
+                  <option value="">Нет</option>
                   {% for job in source_jobs %}
                     {% if job.result_file %}
                       <option value="{{ job.id }}">#{{ job.id }} - {{ job.type }}</option>
@@ -355,15 +364,15 @@
                 </select>
               </div>
               <div>
-                <label for="background_image">New background image</label>
+                <label for="background_image">Новое изображение фона</label>
                 <input id="background_image" name="background_image" type="file" accept="image/*">
               </div>
             </div>
             <div class="row">
               <div>
-                <label for="background_job_id">Or background from previous result</label>
+                <label for="background_job_id">Или фон из предыдущего результата</label>
                 <select id="background_job_id" name="background_job_id">
-                  <option value="">None</option>
+                  <option value="">Нет</option>
                   {% for job in source_jobs %}
                     {% if job.result_file %}
                       <option value="{{ job.id }}">#{{ job.id }} - {{ job.type }}</option>
@@ -372,30 +381,30 @@
                 </select>
               </div>
               <div>
-                <label for="background_prompt">Background prompt</label>
-                <input id="background_prompt" name="background_prompt" placeholder="modern bright office interior with soft natural daylight">
+                <label for="background_prompt">Описание фона</label>
+                <input id="background_prompt" name="background_prompt" placeholder="современный светлый офис с мягким естественным светом">
               </div>
             </div>
             <div class="actions">
-              <button formmethod="post" formaction="{{ url_for('remove_background') }}" type="submit">Remove background</button>
-              <button formmethod="post" formaction="{{ url_for('replace_background_prompt') }}" type="submit" class="secondary">Replace by prompt</button>
-              <button formmethod="post" formaction="{{ url_for('replace_background_image') }}" type="submit" class="secondary">Replace by image</button>
+              <button formmethod="post" formaction="{{ url_for('remove_background') }}" type="submit">Удалить фон</button>
+              <button formmethod="post" formaction="{{ url_for('replace_background_prompt') }}" type="submit" class="secondary">Заменить по описанию</button>
+              <button formmethod="post" formaction="{{ url_for('replace_background_image') }}" type="submit" class="secondary">Заменить по изображению</button>
             </div>
           </form>
         </section>
 
         <section class="card">
-          <h2>Refine</h2>
+          <h2>Доработка</h2>
           <form method="post" action="{{ url_for('upscale') }}" enctype="multipart/form-data">
             <div class="row">
               <div>
-                <label for="upscale_image">Upload image</label>
+                <label for="upscale_image">Загрузить изображение</label>
                 <input id="upscale_image" name="image" type="file" accept="image/*">
               </div>
               <div>
-                <label for="upscale_source_job_id">Or choose previous result</label>
+                <label for="upscale_source_job_id">Или выберите предыдущий результат</label>
                 <select id="upscale_source_job_id" name="source_job_id">
-                  <option value="">None</option>
+                  <option value="">Нет</option>
                   {% for job in source_jobs %}
                     {% if job.result_file %}
                       <option value="{{ job.id }}">#{{ job.id }} - {{ job.type }}</option>
@@ -406,29 +415,29 @@
             </div>
             <div class="row single">
               <div>
-                <label for="target_megapixels">Target megapixels</label>
+                <label for="target_megapixels">Целевое разрешение</label>
                 <select id="target_megapixels" name="target_megapixels">
-                  <option value="4" selected>4 MP</option>
-                  <option value="6">6 MP</option>
-                  <option value="8">8 MP</option>
+                  <option value="4" selected>4 МП</option>
+                  <option value="6">6 МП</option>
+                  <option value="8">8 МП</option>
                 </select>
               </div>
             </div>
             <div class="actions">
-              <button type="submit">Upscale</button>
+              <button type="submit">Увеличить</button>
             </div>
           </form>
 
           <form method="post" action="{{ url_for('vectorize') }}" enctype="multipart/form-data" style="padding-top: 0;">
             <div class="row">
               <div>
-                <label for="vector_image">Vectorize upload</label>
+                <label for="vector_image">Изображение для векторизации</label>
                 <input id="vector_image" name="image" type="file" accept="image/*">
               </div>
               <div>
-                <label for="vector_source_job_id">Or choose previous result</label>
+                <label for="vector_source_job_id">Или выберите предыдущий результат</label>
                 <select id="vector_source_job_id" name="source_job_id">
-                  <option value="">None</option>
+                  <option value="">Нет</option>
                   {% for job in source_jobs %}
                     {% if job.result_file %}
                       <option value="{{ job.id }}">#{{ job.id }} - {{ job.type }}</option>
@@ -438,34 +447,34 @@
               </div>
             </div>
             <div class="actions refine-actions">
-              <button type="submit" class="secondary">Vectorize</button>
+              <button type="submit" class="secondary">Векторизовать</button>
             </div>
           </form>
         </section>
 
         <section class="card history" style="grid-column: 1 / -1;">
-          <h2>History</h2>
+          <h2>История</h2>
           <div class="panel-inner history-wrap" style="padding-top: 0;">
             <table>
               <thead>
                 <tr>
                   <th>ID</th>
-                  <th>Type</th>
-                  <th>Status</th>
-                  <th>Prompt</th>
-                  <th>Result</th>
+                  <th>Тип</th>
+                  <th>Статус</th>
+                  <th>Промпт</th>
+                  <th>Результат</th>
                 </tr>
               </thead>
               <tbody>
                 {% for job in jobs %}
                   <tr>
                     <td data-label="ID">#{{ job.id }}</td>
-                    <td data-label="Type"><span class="tag">{{ job.type }}</span></td>
-                    <td data-label="Status">{{ job.status }}</td>
-                    <td data-label="Prompt" class="muted">{{ job.prompt or '-' }}</td>
-                    <td data-label="Result">
+                    <td data-label="Тип"><span class="tag">{{ job.type }}</span></td>
+                    <td data-label="Статус">{{ job.status }}</td>
+                    <td data-label="Промпт" class="muted">{{ job.prompt or '-' }}</td>
+                    <td data-label="Результат">
                       {% if job.result_file %}
-                        <a href="{{ url_for('job_detail', job_id=job.id) }}">Open</a>
+                        <a href="{{ url_for('job_detail', job_id=job.id) }}">Открыть</a>
                       {% else %}
                         <span class="muted">-</span>
                       {% endif %}
@@ -473,7 +482,7 @@
                   </tr>
                 {% else %}
                   <tr>
-                    <td colspan="5" class="muted">No jobs yet.</td>
+                    <td colspan="5" class="muted">Заданий пока нет.</td>
                   </tr>
                 {% endfor %}
               </tbody>

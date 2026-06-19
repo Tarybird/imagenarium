@@ -28,6 +28,13 @@ MAX_DIMENSION = 1536
 MAX_STEPS = 40
 MAX_UPSCALE_MEGAPIXELS = 4
 
+# Quality presets for /generate: "standard" keeps the requested size/steps as-is,
+# "economy" cuts resolution and step count to make draft generations cheaper.
+QUALITY_PRESETS = {
+    "standard": {"dimension_factor": 1.0, "steps_factor": 1.0},
+    "economy": {"dimension_factor": 0.5, "steps_factor": 0.6},
+}
+
 # Demo mode caps request volume on a public deployment. A holder of
 # DEMO_ACCESS_TOKEN (sent as header X-Demo-Token or form field access_token)
 # is treated as a trusted/own user and exempted from the stricter public
@@ -88,8 +95,8 @@ def create_app() -> Flask:
     @app.errorhandler(429)
     def rate_limit_exceeded(_exc):
         flash(
-            "Demo rate limit reached for this IP (a small number of paid Runware "
-            "calls per hour). Please try again later.",
+            "Достигнут демо-лимит запросов для вашего IP (не более 5 платных "
+            "запросов к Runware в сутки). Попробуйте снова завтра.",
             "error",
         )
         return redirect(url_for("index")), 429
@@ -117,7 +124,7 @@ def create_app() -> Flask:
     def job_detail(job_id: int):
         job = get_job(job_id)
         if job is None:
-            flash("Job not found.", "error")
+            flash("Задание не найдено.", "error")
             return redirect(url_for("index"))
         return render_template(
             "result.html",
@@ -138,19 +145,27 @@ def create_app() -> Flask:
         return send_from_directory(path.parent, path.name)
 
     @app.post("/generate")
-    @limiter.limit("5 per hour", exempt_when=is_trusted_caller)
-    @limiter.limit("20 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
+    @limiter.limit("5 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
     def generate():
         prompt = request.form.get("prompt", "").strip()
         negative_prompt = request.form.get("negative_prompt", "").strip()
-        width = clamp_dimension(parse_int(request.form.get("width"), get_default_int("DEFAULT_WIDTH", 1024)))
-        height = clamp_dimension(parse_int(request.form.get("height"), get_default_int("DEFAULT_HEIGHT", 1024)))
-        steps = clamp_steps(parse_int(request.form.get("steps"), 30))
+        quality = request.form.get("quality", "standard").strip().lower()
+        if quality not in QUALITY_PRESETS:
+            quality = "standard"
+        preset = QUALITY_PRESETS[quality]
+
+        requested_width = parse_int(request.form.get("width"), get_default_int("DEFAULT_WIDTH", 1024))
+        requested_height = parse_int(request.form.get("height"), get_default_int("DEFAULT_HEIGHT", 1024))
+        requested_steps = parse_int(request.form.get("steps"), 30)
+
+        width = clamp_dimension(int(requested_width * preset["dimension_factor"]))
+        height = clamp_dimension(int(requested_height * preset["dimension_factor"]))
+        steps = clamp_steps(int(requested_steps * preset["steps_factor"]))
         seed = parse_optional_int(request.form.get("seed"))
         model = os.environ.get("RUNWARE_TEXT_MODEL", "runware:101@1")
 
         if not prompt:
-            flash("Prompt is required.", "error")
+            flash("Промпт обязателен.", "error")
             return redirect(url_for("index"))
 
         try:
@@ -173,7 +188,7 @@ def create_app() -> Flask:
                 cost_usd=result.cost,
                 result_file=result.local_path,
             )
-            flash("Image generated.", "success")
+            flash("Изображение сгенерировано.", "success")
             return redirect(url_for("job_detail", job_id=job_id))
         except Exception as exc:
             job_id = create_job(
@@ -185,16 +200,15 @@ def create_app() -> Flask:
                 height=height,
                 error_message=str(exc),
             )
-            flash(f"Generation failed: {exc}", "error")
+            flash(f"Не удалось сгенерировать изображение: {exc}", "error")
             return redirect(url_for("job_detail", job_id=job_id))
 
     @app.post("/remove-background")
-    @limiter.limit("5 per hour", exempt_when=is_trusted_caller)
-    @limiter.limit("20 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
+    @limiter.limit("5 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
     def remove_background():
         source = get_upload_or_source("image", "source_job_id")
         if source is None:
-            flash("Upload an image or choose a previous result.", "error")
+            flash("Загрузите изображение или выберите предыдущий результат.", "error")
             return redirect(url_for("index"))
 
         model = os.environ.get("RUNWARE_REMOVE_BG_MODEL", "runware:109@1")
@@ -209,7 +223,7 @@ def create_app() -> Flask:
                 cost_usd=result.cost,
                 result_file=result.local_path,
             )
-            flash("Background removed.", "success")
+            flash("Фон удалён.", "success")
             return redirect(url_for("job_detail", job_id=job_id))
         except Exception as exc:
             job_id = create_job(
@@ -219,19 +233,18 @@ def create_app() -> Flask:
                 model=model,
                 error_message=str(exc),
             )
-            flash(f"Background removal failed: {exc}", "error")
+            flash(f"Не удалось удалить фон: {exc}", "error")
             return redirect(url_for("job_detail", job_id=job_id))
 
     @app.post("/replace-background-prompt")
-    @limiter.limit("5 per hour", exempt_when=is_trusted_caller)
-    @limiter.limit("20 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
+    @limiter.limit("5 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
     def replace_background_prompt():
         source = get_upload_or_source("image", "source_job_id")
         prompt = request.form.get("background_prompt", "").strip()
         width = clamp_dimension(parse_int(request.form.get("width"), get_default_int("DEFAULT_WIDTH", 1024)))
         height = clamp_dimension(parse_int(request.form.get("height"), get_default_int("DEFAULT_HEIGHT", 1024)))
         if source is None or not prompt:
-            flash("Upload an image and describe the background.", "error")
+            flash("Загрузите изображение и опишите фон.", "error")
             return redirect(url_for("index"))
 
         inpaint_model = os.environ.get("RUNWARE_INPAINT_MODEL", "runware:102@1")
@@ -262,7 +275,7 @@ def create_app() -> Flask:
                 cost_usd=(mask_result.cost or 0.0) + (inpaint.cost or 0.0),
                 result_file=inpaint.local_path,
             )
-            flash("Background replaced using inpainting.", "success")
+            flash("Фон заменён методом inpainting.", "success")
             return redirect(url_for("job_detail", job_id=job_id))
         except Exception as exc:
             job_id = create_job(
@@ -275,17 +288,16 @@ def create_app() -> Flask:
                 height=height,
                 error_message=str(exc),
             )
-            flash(f"Background replacement failed: {exc}", "error")
+            flash(f"Не удалось заменить фон: {exc}", "error")
             return redirect(url_for("job_detail", job_id=job_id))
 
     @app.post("/replace-background-image")
-    @limiter.limit("5 per hour", exempt_when=is_trusted_caller)
-    @limiter.limit("20 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
+    @limiter.limit("5 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
     def replace_background_image():
         source = get_upload_or_source("image", "source_job_id")
         background_source = get_upload_or_source("background_image", "background_job_id")
         if source is None or background_source is None:
-            flash("Upload both source and background images.", "error")
+            flash("Загрузите оба изображения: исходное и фон.", "error")
             return redirect(url_for("index"))
 
         try:
@@ -307,7 +319,7 @@ def create_app() -> Flask:
                 result_file=composited_path,
                 cost_usd=removed.cost,
             )
-            flash("Background replaced from the second image.", "success")
+            flash("Фон заменён из второго изображения.", "success")
             return redirect(url_for("job_detail", job_id=job_id))
         except Exception as exc:
             job_id = create_job(
@@ -317,16 +329,15 @@ def create_app() -> Flask:
                 background_file=background_source.saved_path,
                 error_message=str(exc),
             )
-            flash(f"Background replacement failed: {exc}", "error")
+            flash(f"Не удалось заменить фон: {exc}", "error")
             return redirect(url_for("job_detail", job_id=job_id))
 
     @app.post("/upscale")
-    @limiter.limit("5 per hour", exempt_when=is_trusted_caller)
-    @limiter.limit("20 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
+    @limiter.limit("5 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
     def upscale():
         source = get_upload_or_source("image", "source_job_id")
         if source is None:
-            flash("Upload an image or choose a previous result.", "error")
+            flash("Загрузите изображение или выберите предыдущий результат.", "error")
             return redirect(url_for("index"))
 
         model = os.environ.get("RUNWARE_UPSCALE_MODEL", "prunaai:p-image@upscale")
@@ -342,7 +353,7 @@ def create_app() -> Flask:
                 cost_usd=result.cost,
                 result_file=result.local_path,
             )
-            flash("Image upscaled.", "success")
+            flash("Изображение увеличено.", "success")
             return redirect(url_for("job_detail", job_id=job_id))
         except Exception as exc:
             job_id = create_job(
@@ -352,16 +363,15 @@ def create_app() -> Flask:
                 model=model,
                 error_message=str(exc),
             )
-            flash(f"Upscale failed: {exc}", "error")
+            flash(f"Не удалось увеличить изображение: {exc}", "error")
             return redirect(url_for("job_detail", job_id=job_id))
 
     @app.post("/vectorize")
-    @limiter.limit("5 per hour", exempt_when=is_trusted_caller)
-    @limiter.limit("20 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
+    @limiter.limit("5 per day", exempt_when=is_trusted_caller, scope="paid_api_daily")
     def vectorize():
         source = get_upload_or_source("image", "source_job_id")
         if source is None:
-            flash("Upload an image or choose a previous result.", "error")
+            flash("Загрузите изображение или выберите предыдущий результат.", "error")
             return redirect(url_for("index"))
 
         model = os.environ.get("RUNWARE_VECTORIZE_MODEL", "recraft:1@1")
@@ -376,7 +386,7 @@ def create_app() -> Flask:
                 cost_usd=result.cost,
                 result_file=result.local_path,
             )
-            flash("Vector created.", "success")
+            flash("Векторное изображение создано.", "success")
             return redirect(url_for("job_detail", job_id=job_id))
         except Exception as exc:
             job_id = create_job(
@@ -386,7 +396,7 @@ def create_app() -> Flask:
                 model=model,
                 error_message=str(exc),
             )
-            flash(f"Vectorization failed: {exc}", "error")
+            flash(f"Не удалось векторизовать изображение: {exc}", "error")
             return redirect(url_for("job_detail", job_id=job_id))
 
     @app.get("/files/<path:filename>")
